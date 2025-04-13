@@ -31,5 +31,27 @@ CENSUS_API_KEY=your_key_here
 ```
 Do not commit your `.Renviron` file to Git.
 
+## 🚧 Branching Guidelines
+This project uses the Git Flow workflow. Please follow these conventions when contributing:
+
+Start from the develop branch:
+```text
+git checkout develop
+git pull origin develop
+```
+
+Create a new feature branch using the feat/ prefix:
+```text
+git checkout -b feat/short-description
+```
+
+Push your feature branch to GitHub:
+```text
+git push -u origin feat/short-description
+```
+
+Submit a pull request from your feature branch into develop.
+Tag @xindyhu for review.
+
 ## 📌 Project Status
 This project is in active development under the REACH Center pilot grant.
