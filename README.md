@@ -18,6 +18,7 @@ ncwell/
     ├── 1_access_data/       # Scripts to download or load raw data
     ├── 2_data_wrangling/    # Scripts for cleaning and transforming data
     └── 3_eda/               # Exploratory data analysis and initial visualizations
+```
 
 🔧 Requirements
 This project uses R.
