@@ -22,12 +22,14 @@ ncwell/
 
 ## 🔧 Requirements
 This project uses R.
-To begin, open ncwell.Rproj in RStudio and run scripts in the script/ folder in order.
+To begin, open `ncwell.Rproj` in RStudio and run scripts in the `script/` folder in order.
 
 ## 🔐 API Keys
-Store your API keys (e.g., Census API) in an .Renviron file in your home directory:
-`CENSUS_API_KEY=your_key_here`
-Do not commit your .Renviron file to Git.
+Store your API keys (e.g., Census API) in an `.Renviron` file in your home directory:
+```text
+CENSUS_API_KEY=your_key_here
+```
+Do not commit your `.Renviron` file to Git.
 
 ## 📌 Project Status
 This project is in active development under the REACH Center pilot grant.
