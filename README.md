@@ -16,6 +16,7 @@ ncwell/
 ├── README.md             # Project documentation
 ├── renv.lock             # Records the exact versions of R and R packages to ensure reproducibility
 ├── renv/                 # Directory containing renv infrastructure for the project
+├── data/                 # Directory containing input and output data, do not commit to git
 └── script/               # Main analysis scripts
     ├── 1_access_data/       # Scripts to download or load raw data
     ├── 2_data_wrangling/    # Scripts for cleaning and transforming data
