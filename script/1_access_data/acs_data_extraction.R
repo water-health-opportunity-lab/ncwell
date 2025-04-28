@@ -43,7 +43,7 @@ census_api_key(Sys.getenv("CENSUS_API_KEY"), install = FALSE)
 
 # Set year and geography
 year <- 2023
-state <- "NC"
+state <- "CT"
 
 # Tract Level Variables from ACS
 tract_vars <- c(
