@@ -47,10 +47,10 @@ compute_impact_score <- function(points_sf, grid_sf,
   threshold <- set_units(threshold_m, "m")
   
   # Setup progress
-  p <- progressor(steps = nrow(grid_centroids))
+  p <- progressor(steps = length(grid_centroids))
   
   # Compute impact score for each grid cell
-  impact_scores <- future_lapply(seq_len(nrow(grid_centroids)), function(i) {
+  impact_scores <- future_lapply(seq_len(length(grid_centroids)), function(i) {
     p()  # update progress
     
     centroid <- grid_centroids[i, ]
