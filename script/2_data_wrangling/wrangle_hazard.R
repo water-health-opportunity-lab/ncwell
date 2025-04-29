@@ -44,13 +44,13 @@ sems_sf <- st_as_sf(sems_df, coords = c("longitude", "latitude"), crs = 4326)
 
 ## 3. call the impact function
 # take a sample to test the code
-# nc_grid_sample <- nc_grid %>%
-#  slice_sample(n = 10000)
+nc_grid_sample <- nc_grid %>%
+  slice_sample(n = 10000)
 
 handlers("txtprogressbar")
 with_progress({
-  nc_grid <- compute_impact_score(points_sf = sems_sf,
-                                 grid_sf = nc_grid,
+  nc_grid_sample <- compute_impact_score(points_sf = sems_sf,
+                                 grid_sf = nc_grid_sample,
                                  threshold_m = 5000,
                                  weight_var = NULL,
                                  output_var = "sems_impact")
@@ -62,3 +62,6 @@ summary(nc_grid$sems_impact)
 
 # WRITE OUT RESULTS 
 st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
+
+# test
+
