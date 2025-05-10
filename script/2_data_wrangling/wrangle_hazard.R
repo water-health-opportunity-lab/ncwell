@@ -11,7 +11,7 @@
 #   - floodplain map
 #
 # Author: Xindi Hu & Kyndra Shea
-# Last edited: 2025-05-06
+# Last edited: 2025-05-10
 # ----------------------------------------
 # read in helper function
 source(here::here("script/2_data_wrangling/helper_functions.R"))
@@ -258,3 +258,36 @@ nc_grid$ag_runoff <- exact_extract(nitrogen_raster, nc_grid, 'mean')
 # check the result
 summary(nc_grid$ag_runoff)
 
+### 100-YR FLOOD MAP
+## 1. nc_grid is already in memory, get grid cell centroids
+nc_centroids_geom <- st_centroid(st_geometry(nc_grid))  # this avoids the warning
+nc_centroids <- st_sf(nc_grid, geometry = nc_centroids_geom)
+
+## 2. read in FEMA 100-year flood zone shapefile
+flood_shp <- st_read("data/input/FEMA Floodplain/North_Carolina_Flood_Hazard_Area_Effective.shp") %>%
+  select(ZONE_LID)
+
+# filter to 1% annual chance flood zones (100-year flood)
+flood_100yr <- flood_shp %>%
+  filter(ZONE_LID %in% c("1001", "1005", "1003", "1009", "1000"))
+
+## 3. align CRS
+flood_100yr_reprojected <- st_transform(flood_100yr, st_crs(nc_grid))
+
+## 4. Spatial join: assign polygon attribute(s) to each centroid
+# This gives each centroid the value of the polygon it falls in
+nc_centroids_joined <- st_join(nc_centroids, flood_100yr_reprojected, left = TRUE) %>%
+  st_drop_geometry() %>%
+  mutate(fema.floodplain = !is.na(ZONE_LID)) %>%
+  select(grid_id, fema.floodplain)
+
+# 5. Merge the joined values back into the original grid
+nc_grid <- nc_grid %>%
+  left_join(nc_centroids_joined, by = "grid_id")
+
+# check the result
+table(nc_grid$fema.floodplain, useNA = "ifany")
+
+#WRITE OUT RESULTS
+st_write(nc_grid, "data/output/nc_grid_flood_exposure.gpkg",
+         layer = "flood_100yr", delete_layer = TRUE)
