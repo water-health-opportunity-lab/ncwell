@@ -1,7 +1,7 @@
 # ----------------------------------------
 # R Script to extract various predictors from raw data in hazard module
 # Indicators:
-#   - Satellite-based inundation map
+#   - satellite-based inundation map
 #   - impact from superfund sites
 #   - impact from CAFOs
 #   - impact from TRI water releases
@@ -11,7 +11,7 @@
 #   - floodplain map
 #
 # Author: Xindi Hu & Kyndra Shea
-# Last edited: 2025-05-10
+# Last edited: 2025-05-13
 # ----------------------------------------
 # read in helper function
 source(here::here("script/2_data_wrangling/helper_functions.R"))
@@ -34,6 +34,7 @@ flood_inundation_raster_reprojected <- project(flood_inundation_raster, vect(nc_
 # exactextractr handles partial overlaps and weighting
 # variable name "inundation" needs to match what is in the tracker on OneDrive
 nc_grid$inundation <- exact_extract(flood_inundation_raster_reprojected, nc_grid, 'mean')
+
 # check the result
 summary(nc_grid$inundation)
 
@@ -45,6 +46,7 @@ summary(nc_grid$inundation)
 sems_df <- read_excel("data/input/Superfund/sems.xlsx", sheet = 1) %>%
   # convert column names to snake casa using the janitor package
   janitor::clean_names()
+
 # If stored in degrees (e.g., WGS84), use EPSG:4326
 sems_sf <- st_as_sf(sems_df, coords = c("longitude", "latitude"), crs = 4326)
 
@@ -56,18 +58,15 @@ sems_sf <- st_as_sf(sems_df, coords = c("longitude", "latitude"), crs = 4326)
 handlers("txtprogressbar")
 with_progress({
   nc_grid <- compute_impact_score(points_sf = sems_sf,
-                                 grid_sf = nc_grid,
-                                 threshold_m = 5000,
-                                 weight_var = NULL,
-                                 output_var = "sems_impact")
+                                  grid_sf = nc_grid,
+                                  threshold_m = 5000,
+                                  weight_var = NULL,
+                                  output_var = "sems_impact")
 })
 
 # full run takes 316 seconds
 # check the result
 summary(nc_grid$sems_impact)
-
-# WRITE OUT RESULTS 
-st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
 
 ### EXTRACT IMPACTS FROM CAFO LOCATIONS
 
@@ -101,9 +100,6 @@ with_progress({
 # full run takes 1504 seconds
 # check results
 summary(nc_grid$cafo_impact)
-
-## 4. WRITE OUT RESULTS
-st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
 
 ### EXTRACT IMPACTS FROM TRI WATER RELEASES
 
@@ -140,9 +136,6 @@ with_progress({
 # check result
 summary(nc_grid$TRI.water.releases)
 
-## 4. WRITE OUT RESULTS
-st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
-
 ### EXTRACT IMPACTS FROM TRI TOTAL RELEASES
 
 ## 1. nc_grid is already in memory
@@ -171,16 +164,13 @@ with_progress({
 # check result
 summary(nc_grid$TRI.total.releases)
 
-## 4. WRITE OUT RESULTS
-st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
-
 ### EXTRACT IMPACTS FROM ONSITE WASTEWATER TREATMENT SYSTEMS
 
 ## 1. nc_grid is already in memory
 
 ## 2. read in point sources
 owts_df <- readxl::read_excel("data/input/Onsite Wastewater Treatment Systems/NPDES_Wastewater_Discharge_Permits_-4938817765183004059.xlsx") %>%
-  janitor::clean_names()
+  janitor::clean_names()  # convert column names to snake casa using the janitor package
 
 # Convert to spatial points (assuming WGS84 / EPSG:4326)
 owts_sf <- st_as_sf(owts_df, coords = c("long", "lat"), crs = 4326)
@@ -200,9 +190,6 @@ with_progress({
 # full run takes 1650 seconds
 # check results
 summary(nc_grid$owts)
-
-## 4. WRITE OUT RESULTS
-st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
 
 ### EXTRACT IMPACTS FROM AGRICULTURAL RUNOFF
 
@@ -288,6 +275,5 @@ nc_grid <- nc_grid %>%
 # check the result
 table(nc_grid$fema.floodplain, useNA = "ifany")
 
-#WRITE OUT RESULTS
-st_write(nc_grid, "data/output/nc_grid_flood_exposure.gpkg",
-         layer = "flood_100yr", delete_layer = TRUE)
+# WRITE OUT RESULTS 
+st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
