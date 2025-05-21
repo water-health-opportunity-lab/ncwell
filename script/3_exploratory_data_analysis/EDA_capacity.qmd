@@ -1,0 +1,907 @@
+---
+title: "Exploratory Data Analysis (Capacity Module)"
+format: html
+toc: true
+editor: visual
+code-fold: true
+self-contained: true
+---
+
+## 1. Highlight and a Summary
+
+The below is a highlight for this exploratory data analysis of capacity module.
+
+1.  There exists serious multicollinearity for Population size and Households. Removing one of them from the pool of variables should resolve this problem.
+2.  We found many outliers for (1) English proficiency, (2) Nativity, (3) Active commuting, (4) Crowded housing, and (5) Plumbing. Domain knowledge may be needed to deal with those outliers. It appears that **applying square root transformation helps** resolve this issue.
+3.  We do not observe many missing entries in this dataset.
+4.  There exist Infinite values in Internet and Computer. They are supposed to be in percentage.
+
+The sample size of this dataset is 129169 and it has 25 variables.
+
+```{r}
+# load packages
+require('sf')
+
+# read data
+data <- st_read('nc_grid_capacity.gpkg')
+
+# total sample size
+(n <- nrow(data))
+
+# dimension
+(p <- ncol(data) - 4)
+
+# colnames
+colnames(data)
+```
+
+Next, we look into the variables in different groups.
+
+## 2. Analysis for different groups of variables
+
+Next, we present the exploratory data analysis for different groups of variables. We check missing percentage, mean, standard deviation (SD), median, and interquantile range (IQR) of the variables. For the groups more than 1 variable, we check multicollinearity through variance inflation factors (VIFs). Moreover, the histograms and boxplots of the variables are also presented. The proportions of outliers are also provided.
+
+### **2.1 Race/ethnicity**
+
+First, the descriptive statistics of the variables in race/ethnicity are presented below.
+
+```{r}
+
+# variable name
+name.race <- c('Minority', 'English proficiency')
+
+# check missing percentage
+mp.race <- c(length(which(is.na(data$pct_minority) == TRUE)) / n, 
+             length(which(is.na(data$pct_limited_english) == TRUE)) / n)
+
+# check class
+class.race <- c(class(data$pct_minority), 
+                class(data$pct_limited_english))
+
+# check mean
+mean.race <- c(mean(data$pct_minority, na.rm = TRUE), 
+               mean(data$pct_limited_english, na.rm = TRUE))
+
+# check standard deviation
+sd.race <- c(sd(data$pct_minority, na.rm = TRUE), 
+             sd(data$pct_limited_english, na.rm = TRUE))
+
+# check median
+median.race <- c(median(data$pct_minority, na.rm = TRUE), 
+                 median(data$pct_limited_english, na.rm = TRUE))
+
+# check interquantile range
+iqr <- function(x) paste0(round(quantile(na.omit(x), .25), 2), '-', 
+                          round(quantile(na.omit(x), .75), 2))
+iqr.race <- c(iqr(data$pct_minority), iqr(data$pct_limited_english))
+
+# summary table
+summary.race <- data.frame(Name = name.race, 
+                           Class = class.race, 
+                           Missing_Percentage = round(mp.race * 100, 2),
+                           Mean = round(mean.race, 2),
+                           Median = round(median.race, 2),
+                           SD = round(sd.race, 2),
+                           IQR = iqr.race)
+
+print(summary.race)
+```
+
+Next, we investigate if there is a multicollinearity between the variables in the group in the Race/ethnicity group. According to the results of VIFs below, we don't see any problems under a rule of thumb of 5.
+
+```{r}
+race <- data.frame(data$pct_minority,
+                   data$pct_limited_english)
+vifs.race <- c()
+for (j in 1:2) {
+  y.j <- race[, j]
+  x.j <- race[, -j]
+  mod <- lm(y.j ~ x.j)
+  vifs.race[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+names(vifs.race) <- name.race
+print(round(vifs.race, 2))
+```
+
+The histograms of those two variables are presented below. Both of them are right-skewed but English proficiency is highly right-skewed.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(data$pct_minority, col = 'white', border = 'magenta',
+     xlab = '',
+     main = 'Minority')
+hist(data$pct_limited_english, col = 'white', border = 'deepskyblue',
+     xlab = '',
+     main = 'English Proficiency')
+```
+
+The boxplots of the two variables in race/ethnicity are presented below. As we can see,
+
+1.  There are a few outliers for Minority, mainly on the right tail of the distribution.
+2.  In contrast, English proficiency has more outliers, at different levels.
+
+```{r}
+par(mfrow = c(1, 2))
+boxplot(data$pct_minority, col = 'white', border = 'magenta',
+        xlab = 'Minority')
+boxplot(data$pct_limited_english, 
+        xlab = 'English Proficiency',
+        col = 'white', border = 'deepskyblue')
+```
+
+In specific, the percentage of outliers on the right-tail is shown below. They are defined as the observations that have distances greater than 1.5 times IQR from the 75% quantile. Indeed, around 17% of the English proficiency are outliers.
+
+```{r}
+# find the percentage of outliers on the right tail
+right.whisker <- function(x) {
+  n <- length(x)
+  qf <- quantile(x, c(.25, .75), na.rm = TRUE)
+  IQR <- qf[2] - qf[1]
+  length(which(x > qf[2] + 1.5 * IQR)) / n
+}
+
+# percentage of outliers on the right tail
+outlier.percent <- c(right.whisker(data$pct_minority),
+                     right.whisker(data$pct_limited_english)) * 100 
+names(outlier.percent) <- name.race
+print(round(outlier.percent, 2))
+```
+
+In terms of English proficiency, we check its distribution on the right tail below. It may be a good idea to transform it into an ordered binary variable.Or alternatively, we may check if log transformation and square root transformation helps. As we can see below, square root transformation helps.
+
+```{r}
+quantile(na.omit(data$pct_limited_english), c(.8, .85, .9, .95))
+summary(ifelse(data$pct_limited_english > 0, 1, 0))
+
+oc.check <- function(x, level = .99, method = 'log') {
+  x[which(x == Inf)] <- NA
+  cv <- qnorm(level)
+  if (method == 'log') {
+    x <- log(na.omit(x) + 1e-4)
+  } else if (method == 'sqrt') {
+    x <- sqrt(x)
+  }
+  n <- length(x)
+  length(which(x > mean(x) + cv * sd(x) | x < mean(x) - cv * sd(x))) / n
+}
+
+oc.check(data$pct_limited_english, method = 'log')
+oc.check(data$pct_limited_english, method = 'sqrt')
+```
+
+```         
+
+```
+
+### **2.2 Socioeconomic**
+
+The summary statistics of the variables in the socioeconomic group are presented below.
+
+```{r}
+
+# variable name
+name.socioeco <- c('Single-parent', 'Unemployment', 'Education', 'Poverty')
+
+# check missing percentage
+mp.socioeco <- c(length(which(is.na(data$pct_single_parent) == TRUE)) / n, 
+                 length(which(is.na(data$pct_unemployed) == TRUE)) / n,
+                 length(which(is.na(data$pct_no_college) == TRUE)) / n,
+                 length(which(is.na(data$pct_poverty) == TRUE)) / n)
+
+# check class
+class.socioeco <- c(class(data$pct_single_parent), 
+                    class(data$pct_unemployed),
+                    class(data$pct_no_college),
+                    class(data$pct_poverty))
+
+# check mean
+mean.socioeco <- c(mean(data$pct_single_parent, na.rm = TRUE), 
+               mean(data$pct_unemployed, na.rm = TRUE),
+               mean(data$pct_no_college, na.rm = TRUE),
+               mean(data$pct_poverty, na.rm = TRUE))
+
+# check standard deviation
+sd.socioeco <- c(sd(data$pct_single_parent, na.rm = TRUE), 
+             sd(data$pct_unemployed, na.rm = TRUE),
+             sd(data$pct_no_college, na.rm = TRUE),
+             sd(data$pct_poverty, na.rm = TRUE))
+
+# check median
+median.socioeco <- c(median(data$pct_single_parent, na.rm = TRUE), 
+                 median(data$pct_unemployed, na.rm = TRUE),
+                 median(data$pct_no_college, na.rm = TRUE),
+                 median(data$pct_poverty, na.rm = TRUE))
+
+# check interquantile range
+iqr.socioeco <- c(iqr(data$pct_single_parent), 
+                 iqr(data$pct_unemployed),
+                 iqr(data$pct_no_college),
+                 iqr(data$pct_poverty))
+
+# summary table
+summary.socioeco <- data.frame(Name = name.socioeco, 
+                           Class = class.socioeco, 
+                           Missing_Percentage = round(mp.socioeco * 100, 2),
+                           Mean = round(mean.socioeco, 2),
+                           Median = round(median.socioeco, 2),
+                           SD = round(sd.socioeco, 2),
+                           IQR = iqr.socioeco)
+
+print(summary.socioeco)
+```
+
+Next, we investigate whether there exists a multicolinearity among those variables. Using a rule of thumb of 5, there exist no serious multicolinearity in the socioeconomic group.
+
+```{r}
+require('car')
+socioeco <- data.frame(data$pct_single_parent,
+                       data$pct_unemployed, 
+                       data$pct_no_college,
+                       data$pct_poverty)
+vifs.socioeco <- c()
+for (j in 1:4) {
+  y.j <- socioeco[, j]
+  x.j <- socioeco[, -j]
+  mod <- lm(y.j ~ ., data = x.j)
+  vifs.socioeco[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+names(vifs.socioeco) <- name.socioeco
+print(round(vifs.socioeco, 2))
+
+```
+
+```{r}
+par(mfrow = c(2, 2))
+hist(data$pct_single_parent, col = 'white', border = 'magenta',
+     xlab = '',
+     main = name.socioeco[1])
+hist(data$pct_unemployed, col = 'white', border = 'deepskyblue',
+     xlab = '',
+     main = name.socioeco[2])
+hist(data$pct_no_college, col = 'white', border = 'indianred1',
+     xlab = '',
+     main = name.socioeco[3])
+hist(data$pct_poverty, col = 'white', border = 'slateblue',
+     xlab = '',
+     main = name.socioeco[4])
+```
+
+The boxplots of the variables in the socioeconomic group are presented below.
+
+```{r}
+par(mfrow = c(1, 2))
+boxplot(data$pct_single_parent, col = 'white', border = 'magenta',
+        xlab = name.socioeco[1])
+boxplot(data$pct_unemployed, 
+        xlab = name.socioeco[2],
+        col = 'white', border = 'deepskyblue')
+par(mfrow = c(1, 2))
+boxplot(data$pct_no_college, 
+        xlab = name.socioeco[3],
+        col = 'white', border = 'indianred1')
+boxplot(data$pct_poverty, 
+        xlab = name.socioeco[4],
+        col = 'white', border = 'slateblue')
+```
+
+Next, we find the percentage of outliers on the right-tail. We don't see alarming signs here in terms of outliers.
+
+```{r}
+# find the percentage of outliers on the right tail
+right.whisker <- function(x) {
+  n <- length(x)
+  qf <- quantile(x, c(.25, .75), na.rm = TRUE)
+  IQR <- qf[2] - qf[1]
+  length(which(x > qf[2] + 1.5 * IQR)) / n
+}
+
+# percentage of outliers on the right tail
+outlier.percent <- c(right.whisker(data$pct_single_parent),
+                     right.whisker(data$pct_unemployed),
+                     right.whisker(data$pct_no_college),
+                     right.whisker(data$pct_poverty)) * 100 
+names(outlier.percent) <- name.socioeco
+print(round(outlier.percent, 2))
+```
+
+Next, we check whether we can do some transformation to resolve this issue, which considers log transformation and square root transformation. The idea is to cover a desired proportion of data (say, 98%) of normally behaved data under some transformation. According to the results below, we may need to consider square root transformation for education. However, for single-parent and unemployment, either one works well.
+
+```{r}
+# single-parent
+oc.check(data$pct_single_parent, method = 'log')
+oc.check(data$pct_single_parent, method = 'sqrt')
+# unemployment
+oc.check(data$pct_unemployed, method = 'log')
+oc.check(data$pct_unemployed, method = 'sqrt')
+# education
+oc.check(data$pct_no_college, method = 'log')
+oc.check(data$pct_no_college, method = 'sqrt')
+```
+
+### **2.3 Health risk**
+
+The summary statistics of the variables in the health risk group are presented below.
+
+```{r}
+# variable name
+name.health.risk <- c('Sex', 'Seniors', 'Youth', 'Pregnancy', 'Health insurance')
+
+# check missing percentage
+mp.health.risk <- c(length(which(is.na(data$pct_women) == TRUE)) / n, 
+                    length(which(is.na(data$pct_over_65) == TRUE)) / n,
+                    length(which(is.na(data$pct_under_17) == TRUE)) / n,
+                    length(which(is.na(data$pct_women_gave_birth) == TRUE)) / n,
+                    length(which(is.na(data$pct_insured) == TRUE)) / n)
+
+# check class
+class.health.risk <- c(class(data$pct_women), 
+                       class(data$pct_over_65),
+                       class(data$pct_under_17),
+                       class(data$pct_women_gave_birth),
+                       class(data$pct_insured))
+
+# check mean
+mean.health.risk <- c(mean(data$pct_women, na.rm = TRUE), 
+                      mean(data$pct_over_65, na.rm = TRUE),
+                      mean(data$pct_under_17, na.rm = TRUE),
+                      mean(data$pct_women_gave_birth, na.rm = TRUE),
+                      mean(data$pct_insured, na.rm = TRUE))
+
+# check standard deviation
+sd.health.risk <- c(sd(data$pct_women, na.rm = TRUE), 
+                    sd(data$pct_over_65, na.rm = TRUE),
+                    sd(data$pct_under_17, na.rm = TRUE),
+                    sd(data$pct_women_gave_birth, na.rm = TRUE),
+                    sd(data$pct_insured, na.rm = TRUE))
+
+# check median
+median.health.risk <- c(median(data$pct_women, na.rm = TRUE), 
+                        median(data$pct_over_65, na.rm = TRUE),
+                        median(data$pct_under_17, na.rm = TRUE),
+                        median(data$pct_women_gave_birth, na.rm = TRUE),
+                        median(data$pct_insured, na.rm = TRUE))
+
+# check interquantile range
+iqr.health.risk <- c(iqr(data$pct_women), 
+                     iqr(data$pct_over_65),
+                     iqr(data$pct_under_17),
+                     iqr(data$pct_women_gave_birth),
+                     iqr(data$pct_insured))
+
+# summary table
+summary.health.risk <- data.frame(Name = name.health.risk, 
+                           Class = class.health.risk, 
+                           Missing_Percentage = round(mp.health.risk * 100, 2),
+                           Mean = round(mean.health.risk, 2),
+                           Median = round(median.health.risk, 2),
+                           SD = round(sd.health.risk, 2),
+                           IQR = iqr.health.risk)
+
+print(summary.health.risk)
+```
+
+Next, we investigate whether there exists a multicolinearity among those variables. Using a rule of thumb of 5, there exist no serious multicolinearity in the health risk group.
+
+```{r}
+require('car')
+health.risk <- data.frame(data$pct_women,
+                          data$pct_over_65, 
+                          data$pct_under_17,
+                          data$pct_women_gave_birth,
+                          data$pct_insured)
+vifs.health.risk <- c()
+for (j in 1:5) {
+  y.j <- health.risk[, j]
+  x.j <- health.risk[, -j]
+  mod <- lm(y.j ~ ., data = x.j)
+  vifs.health.risk[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+names(vifs.health.risk) <- name.health.risk
+print(round(vifs.health.risk, 2))
+```
+
+Next, we check the histogram of the variables in the health risk group.
+
+```{r}
+par(mfrow = c(2, 3))
+hist(data$pct_women, col = 'white', border = 'magenta',
+     xlab = '',
+     main = name.health.risk[1])
+hist(data$pct_over_65, col = 'white', border = 'deepskyblue',
+     xlab = '',
+     main = name.health.risk[2])
+hist(data$pct_under_17, col = 'white', border = 'indianred1',
+     xlab = '',
+     main = name.health.risk[3])
+hist(data$pct_women_gave_birth, col = 'white', border = 'slateblue',
+     xlab = '',
+     main = name.health.risk[4])
+hist(data$pct_insured, col = 'white', border = 'royalblue',
+     xlab = '',
+     main = name.health.risk[5])
+```
+
+We can observe that
+
+1.  The distribution of Sex looks bell-shaped.
+2.  The distributions of Seniors, Youth, and Pregnancy are right-skewed. It looks like there may be some outliers at the right tail for Pregnancy and Seniors.
+3.  The distribution of Health insurance is left-skewed. There may exist some outliers at the left tail.
+
+Next, we check the boxplots of the variables in the health risk group. According to the boxplots, there may have some outliers at the left and right tails of Sex. And there are some outliers at the right tail of Youth.
+
+```{r}
+par(mfrow = c(1, 2))
+boxplot(data$pct_women, col = 'white', border = 'magenta',
+        xlab = name.health.risk[1])
+boxplot(data$pct_over_65, 
+        xlab = name.health.risk[2],
+        col = 'white', border = 'deepskyblue')
+par(mfrow = c(1, 3))
+boxplot(data$pct_under_17, 
+        xlab = name.health.risk[3],
+        col = 'white', border = 'indianred1')
+boxplot(data$pct_women_gave_birth, 
+        xlab = name.health.risk[4],
+        col = 'white', border = 'slateblue')
+boxplot(data$pct_insured, 
+        xlab = name.health.risk[5],
+        col = 'white', border = 'royalblue')
+```
+
+Last, we check the proportion of outliers as below. We don't see alarming signs here in terms of outliers.
+
+```{r}
+whisker <- function(x) {
+  n <- length(x)
+  qf <- quantile(x, c(.25, .75), na.rm = TRUE)
+  IQR <- qf[2] - qf[1]
+  length(which(x > qf[2] + 1.5 * IQR | x < qf[1] - 1.5 * IQR)) / n
+}
+# percentage of outliers on the right tail
+outlier.percent <- c(whisker(data$pct_women),
+                     whisker(data$pct_over_65),
+                     whisker(data$pct_under_17),
+                     whisker(data$pct_women_gave_birth),
+                     whisker(data$pct_insured)) * 100 
+names(outlier.percent) <- name.health.risk
+print(round(outlier.percent, 2))
+```
+
+Similarly, we check whether we can apply some transformation to avoid this issue. As we can see, we may need to consider square root transformation for Health insurance. For Sex, Seniors, and Pregnancy, either one works well.
+
+```{r}
+# Sex
+oc.check(data$pct_women, method = 'log')
+oc.check(data$pct_women, method = 'sqrt')
+
+# Seniors
+oc.check(data$pct_over_65, method = 'log')
+oc.check(data$pct_over_65, method = 'sqrt')
+
+# Pregnancy
+oc.check(data$pct_women_gave_birth, method = 'log')
+oc.check(data$pct_women_gave_birth, method = 'sqrt')
+
+# Health insurance
+oc.check(data$pct_insured, method = 'log')
+oc.check(data$pct_insured, method = 'sqrt')
+```
+
+### **2.4 Immigration status**
+
+Next, we provide the descriptive statistics of the immigration status. As it has only one variable, we do not check multicollinearity.
+
+```{r}
+
+# variable name
+name.is <- c('Nativity')
+
+# check missing percentage
+mp.is <- c(length(which(is.na(data$pct_us_born) == TRUE)) / n)
+
+# check class
+class.is <- c(class(data$pct_us_born))
+
+# check mean
+mean.is <- c(mean(data$pct_us_born, na.rm = TRUE))
+
+# check standard deviation
+sd.is <- c(sd(data$pct_us_born, na.rm = TRUE))
+
+# check median
+median.is <- c(median(data$pct_us_born, na.rm = TRUE))
+
+# check interquantile range
+iqr.is <- c(iqr(data$pct_us_born))
+
+# summary table
+summary.is <- data.frame(Name = name.is, 
+                           Class = class.is, 
+                           Missing_Percentage = round(mp.is * 100, 2),
+                           Mean = round(mean.is, 2),
+                           Median = round(median.is, 2),
+                           SD = round(sd.is, 2),
+                           IQR = iqr.is)
+
+print(summary.is)
+```
+
+Next, we present the histogram and boxplot of Nativity. As we can see, the distribution of Nativity is highly left-skewed. Most of the regions are US-born.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(data$pct_us_born, col = 'white', border = 'magenta',
+     xlab = '',
+     main = name.is[1])
+boxplot(data$pct_us_born, col = 'white', border = 'magenta',
+        xlab = name.is[1])
+```
+
+We further check the percentage of outliers. Depending on the need for the robustness, analysis may need to accommodate those outliers.
+
+```{r}
+# percentage of outliers on the right tail
+outlier.percent <- c(whisker(data$pct_us_born)) * 100 
+names(outlier.percent) <- name.is
+print(round(outlier.percent, 2))
+```
+
+Similarly, we check whether applying log transformation or square root transformation works. As we can see, square root transformation works well.
+
+```{r}
+oc.check(data$pct_us_born, method = 'log')
+oc.check(data$pct_us_born, method = 'sqrt')
+```
+
+### **2.5 Social cohesion**
+
+The descriptive statistics of the variables in the social cohesion group are shown below.
+
+```{r}
+# function for summary statistics
+summ <- function(x, names) {
+  p <- ncol(x)
+  n <- nrow(x)
+  tab <- data.frame()
+  for (j in 1:p) {
+    x.j <- x[, j]
+    info <- c(round(length(which(is.na(x.j) == TRUE)) / n * 100, 2),
+              class(x.j),
+              round(mean(x.j, na.rm = TRUE), 2),
+              round(sd(x.j, na.rm = TRUE), 2),
+              round(median(x.j, na.rm = TRUE), 2),
+              iqr(x.j))
+    tab <- rbind(tab, info)
+  }
+  tab <- cbind(names, tab)
+  colnames(tab) <- c('Name', 'Missing Percentage', 'Class', 'Mean', 'SD', 'Median',
+                     'IQR')
+  print(tab)
+}
+names.social.cohesion <- c('Homeownership rate', 'Active commuting',
+                           'Geographical mobility')
+x.social.cohesion <- cbind(data$pct_owner_occupied, data$pct_active_commuting,
+                           data$pct_no_move)
+summ(x = x.social.cohesion, names = names.social.cohesion)
+```
+
+Then, we check the VIFs of the variables in the social cohesion group. As we can see, we do not observe serious multicollinearity below.
+
+```{r}
+vifs.social.cohesion <- c()
+for (j in 1:3) {
+  y.j <- x.social.cohesion[, j]
+  x.j <- x.social.cohesion[, -j]
+  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
+  vifs.social.cohesion[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+names(vifs.social.cohesion) <- names.social.cohesion
+print(round(vifs.social.cohesion, 2))
+```
+
+Next, we look at the histograms and boxplots of the variables in the social cohesion group. As we may observe, the distributions of active commuting, government jobs are right-skewed while those of Homeownership rate and geographical mobility are left-skewed. Among them, active commuting may have more extreme outliers than others.
+
+```{r}
+cols <- c('magenta', 'deepskyblue', 'indianred1', 'royalblue')
+par(mfrow = c(1, 3))
+for (j in 1:3) {
+  hist(x.social.cohesion[, j], 
+       col = 'white', border = cols[j],
+       xlab = '',
+       main = names.social.cohesion[j])
+}
+par(mfrow = c(1, 3))
+for (j in 1:3) {
+  boxplot(x.social.cohesion[, j], 
+          col = 'white', border = cols[j],
+          main = '',
+          xlab = names.social.cohesion[j])
+}
+```
+
+Next, we find the proportion of outliers to double-check. According to the results below, we can see that active commuting have many outliers.
+
+```{r}
+outlier.percent <- apply(x.social.cohesion, 2, whisker) * 100
+names(outlier.percent) <- names.social.cohesion
+print(round(outlier.percent, 2))
+```
+
+Next, we check whether we can do some transformation to avoid the outliers. According to the results below, we may want to consider square root transformation for geographical mobility. While for the homeownership and active commuting, either works well.
+
+```{r}
+# Homeownership
+oc.check(data$pct_owner_occupied, method = 'log')
+oc.check(data$pct_owner_occupied, method = 'sqrt')
+
+# Active commuting
+oc.check(data$pct_active_commuting, method = 'log')
+oc.check(data$pct_active_commuting, method = 'sqrt')
+
+# Geographical mobility
+oc.check(data$pct_no_move, method = 'log')
+oc.check(data$pct_no_move, method = 'sqrt')
+```
+
+### **2.6 Institution Capacity**
+
+The summary statistics of institution capacity are presented below. Since this only has one variables, we do no check multicollinearity.
+
+```{r}
+names.ic <- c('Government jobs')
+x.ic <- cbind(data$pct_gov_workers)
+summ(x = x.ic, names = names.ic)
+```
+
+Next, we check its histogram and boxplot of institution capacity below. As we can see, the distribution of government jobs is right-skewed, with some outliers.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(x.ic, 
+       col = 'white', border = cols[1],
+       xlab = names.ic[j])
+boxplot(x.ic, 
+          col = 'white', border = cols[1],
+          main = '',
+          xlab = names.ic[1])
+```
+
+Next, we check the proportion of outliers below. We do not see many outliers here.
+
+```{r}
+outlier.percent <- apply(x.ic, 2, whisker) * 100
+names(outlier.percent) <- names.ic
+print(round(outlier.percent, 2))
+```
+
+Next, we check whether we can do some transformation to resolve this issue. From the results below, either log transformation or square root transformation works well.
+
+```{r}
+# Government jobs
+oc.check(data$pct_gov_workers, method = 'log')
+oc.check(data$pct_gov_workers, method = 'sqrt')
+```
+
+### **2.7 Built environment**
+
+First, we check the summary statistics of the variables in the built environment below.
+
+```{r}
+names.built.environment <- c('Crowded housing', 'Plumbing', 'Home age')
+x.built.environment <- cbind(data$pct_crowded_housing, data$pct_plumbing,
+                           data$pct_new_home)
+summ(x = x.built.environment, names = names.built.environment)
+```
+
+Next, we check the multicollinearity among variables in the built environment group. Here, we do not observe serious multicollinearity problem.
+
+```{r}
+vifs.built.environment <- c()
+for (j in 1:3) {
+  y.j <- x.built.environment[, j]
+  x.j <- x.built.environment[, -j]
+  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
+  vifs.built.environment[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+names(vifs.built.environment) <- names.built.environment
+print(round(vifs.built.environment, 2))
+```
+
+Next, we look at the histograms and boxplots of the variables in the built environment group. As we may observe, the distributions of crowded housing and home age are left-skewed while that of Plumbing is right-skewed. And, there exist some extreme outliers for those variables. For example, for Plumbing, it has an extreme outlier being zero.
+
+```{r}
+par(mfrow = c(1, 3))
+for (j in 1:3) {
+  hist(x.built.environment[, j], 
+       col = 'white', border = cols[j],
+       xlab = '',
+       main = names.built.environment[j])
+}
+par(mfrow = c(1, 3))
+for (j in 1:3) {
+  boxplot(x.built.environment[, j], 
+          col = 'white', border = cols[j],
+          main = '',
+          xlab = names.built.environment[j])
+}
+```
+
+Next, we check the proportion of outliers below. According to the following results, there exist many outliers for crowded housing (**\> 10%**) and plumbing (\> 5%).
+
+```{r}
+outlier.percent <- apply(x.built.environment, 2, whisker) * 100
+names(outlier.percent) <- names.built.environment
+print(round(outlier.percent, 2))
+```
+
+Likewise, we check we can apply transformation to resolve this issue. We can see that only square root transformation works for home age. While for crowded housing and plumbing, either square root transformation or log transformation works well.
+
+```{r}
+# Crowded housing
+oc.check(data$pct_crowded_housing, method = 'log')
+oc.check(data$pct_crowded_housing, method = 'sqrt')
+
+# Plumbing
+oc.check(data$pct_plumbing, method = 'log')
+oc.check(data$pct_plumbing, method = 'sqrt')
+
+# Home age
+oc.check(data$pct_new_home, method = 'log')
+oc.check(data$pct_new_home, method = 'sqrt')
+```
+
+### **2.8 Other social determinants**
+
+First, we check the summary statistics of the variables in this group. So, notice that there exist some data quality issues for population size and computer. Their maximums are INFINITY.
+
+```{r}
+names.osd <- c('Vehicle ownership', 'Internet', 'Computer', 
+               'Population size', 'Housing units', 'Households')
+x.osd <- cbind(data$pct_no_vehicle, data$pct_no_internet, data$pct_no_computer,
+               data$total_pop_e, data$total_housing_e, data$total_households_e)
+summ(x = x.osd, names = names.osd)
+max(na.omit(data$pct_no_internet))
+max(na.omit(data$pct_no_computer))
+```
+
+After ignoring the values that do not make sense, the summary statistics are shown below.
+
+```{r}
+summ.noinf <- function(x, names) {
+  p <- ncol(x)
+  n <- nrow(x)
+  tab <- data.frame()
+  for (j in 1:p) {
+    x.j <- x[, j]
+    x.j[which(x.j == Inf)] <- NA
+    info <- c(round(length(which(is.na(x.j) == TRUE)) / n * 100, 2),
+              class(x.j),
+              round(mean(x.j, na.rm = TRUE), 2),
+              round(sd(x.j, na.rm = TRUE), 2),
+              round(median(x.j, na.rm = TRUE), 2),
+              iqr(x.j))
+    tab <- rbind(tab, info)
+  }
+  tab <- cbind(names, tab)
+  colnames(tab) <- c('Name', 'Missing Percentage', 'Class', 'Mean', 'SD', 'Median',
+                     'IQR')
+  print(tab)
+}
+summ.noinf(x = x.osd, names = names.osd)
+```
+
+Next, we check the VIFs of those variables. Using a rule of thumb of 5, we can see that there exists serious multicollinearity problems for Households and Population size. We check their correlation below. As we can see, they are highly correlated. One of them may be needed to be excluded from the analysis.
+
+```{r}
+vifs.osd <- c()
+for (j in 1:6) {
+  y.j <- x.osd[, j]
+  x.j <- x.osd[, -j]
+  x.j[which(x.j == Inf)] <- NA
+  y.j[which(y.j == Inf)] <- NA
+  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
+  vifs.osd[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+# check VIF
+names(vifs.osd) <- names.osd
+print(round(vifs.osd, 2))
+
+# compute correlations
+pop_size <- x.osd[, 4]
+household <- x.osd[, 6]
+
+# remove INF
+pop_size[which(pop_size == Inf)] <- NA
+household[which(household == Inf)] <- NA
+cor(na.omit(pop_size), na.omit(household))
+```
+
+Next, we check the histograms and boxplots of the variables in this group. All the variables here are highly right-skewed, with outliers on the right.
+
+```{r}
+cols <- c('magenta', 'deepskyblue', 'indianred1', 
+          'royalblue', 'slateblue',  'salmon')
+par(mfrow = c(2, 3))
+for (j in 1:6) {
+  x.j <- x.osd[, j]
+  x.j[which(x.j == Inf)] <- NA
+  hist(x.j, 
+       col = 'white', border = cols[j],
+       xlab = '',
+       main = names.osd[j])
+}
+for (j in 1:6) {
+  if (j == 1 | j == 4) {
+    par(mfrow = c(1, 3))
+  }
+  x.j <- x.osd[, j]
+  x.j[which(x.j == Inf)] <- NA
+  boxplot(x.j, 
+          col = 'white', border = cols[j],
+          main = '',
+          xlab = names.osd[j])
+}
+```
+
+To check the details, their proportions of outliers are shown below. There are a few more outliers in vehicle ownership and computer though the messages here are not very alarming.
+
+```{r}
+outlier.percent <- apply(x.osd, 2, whisker) * 100
+names(outlier.percent) <- names.osd
+print(round(outlier.percent, 2))
+```
+
+Similarly, we check we can apply transformation to resolve this issue. We can see that only square root transformation works for internet and computer. While for vehicle ownership, population size, housing units, and households, either square root transformation or log transformation works well.
+
+```{r}
+# Vehicle ownership
+oc.check(data$pct_no_vehicle, method = 'log')
+oc.check(data$pct_no_vehicle, method = 'sqrt')
+
+# Internet
+oc.check(data$pct_no_internet, method = 'log')
+oc.check(data$pct_no_internet, method = 'sqrt')
+
+# Computer
+oc.check(data$pct_no_computer, method = 'log')
+oc.check(data$pct_no_computer, method = 'sqrt')
+
+# Population size
+oc.check(data$total_pop_e, method = 'log')
+oc.check(data$total_pop_e, method = 'sqrt')
+
+# Housing units
+oc.check(data$total_housing_e, method = 'log')
+oc.check(data$total_housing_e, method = 'sqrt')
+
+# Households
+oc.check(data$total_households_e, method = 'log')
+oc.check(data$total_households_e, method = 'sqrt')
+```
+
+## **3. Multicollinearity (Overall)**
+
+In this section, we check multicollinearity of all the variables. As we can see, the multicollinearity problems occur only for Households and Population size. After removing one of them, this problem should be resolved.
+
+```{r}
+vifs <- c()
+vars <- as.data.frame(data[, -c(1:3, 29)])
+vars <- vars[, -26]
+vars[which(vars == Inf, arr.ind = TRUE)] <- NA
+for (j in 1:25) {
+  y.j <- unlist(vars[, j])
+  x.j <- vars[, -j]
+  y.j[which(y.j == Inf)] <- NA
+  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
+  vifs[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+names(vifs) <- c('Poverty status', 'Pregnancy', 'Health insurance',
+                 'Nativity', 'Geographical mobility', 'Government jobs',
+                 'Minority', 'English proficiency', 'Single-parent', 
+                 'Unemployment', 'Education', 'Sex', 'Seniors', 
+                 'Youth', 'Homeownership rate', 'Active computing', 
+                 'Crowded housing', 'Plumbing', 'Home age', 'Vehicle ownership',
+                 'Internet', 'Computer', 'Population size', 'Housing units', 
+                 'Households')
+print(round(vifs, 2))
+```
