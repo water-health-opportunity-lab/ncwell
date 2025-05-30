@@ -9,11 +9,18 @@ library(sf)
 library(readxl)
 library(janitor)
 library(raster)
+library(terra)
+library(gstat)
 library(exactextractr)
 library(parallel)
 
 ## 1. read in NC grid shapefile
 nc_grid <- st_read("data/output/nc_grid/nc_grid.shp")
+# Create centroid
+nc_grid_centroids <- st_centroid(nc_grid)
+# Keep only the geometry column — remove all extra attributes
+nc_grid_centroids <- st_sf(geometry = st_geometry(nc_grid_centroids))
+
 
 ## 2. define list of geochemical variables
 chemNameList <- c(
@@ -24,7 +31,7 @@ chemNameList <- c(
 )
 
 ## 3. read and prepare A Horizon data
-a_horizon <- read_excel("data/input/Soil Geochemistry/Appendix_3a_Ahorizon_18Sept2013-2.xlsx",
+a_horizon <- read_excel("data/input/Soil Geochemistry/Appendix_3a_Ahorizon_18Sept2013-2.xls",
                         sheet = "A_Horizon",
                         skip = 12) %>%
   filter(StateID == "NC") %>%
@@ -37,18 +44,46 @@ a_horizon <- read_excel("data/input/Soil Geochemistry/Appendix_3a_Ahorizon_18Sep
 geochem_sf <- st_as_sf(a_horizon, coords = c("longitude", "latitude"), crs = 4326)
 geochem_sf_transformed <- st_transform(geochem_sf, st_crs(nc_grid))
 
+# Create regular grid over bounding box
+bbox <- st_bbox(geochem_sf_transformed)
+cellsize <- 5000  # 5 km
+buffer_dist <- 60000
+expanded_bbox <- bbox
+expanded_bbox[c("xmin", "ymin")] <- expanded_bbox[c("xmin", "ymin")] - buffer_dist
+expanded_bbox[c("xmax", "ymax")] <- expanded_bbox[c("xmax", "ymax")] + buffer_dist
+grid <- st_make_grid(
+  st_as_sfc(expanded_bbox), 
+  cellsize = cellsize, 
+  what = "centers", 
+  square = TRUE
+)
+grid_sf <- st_sf(geometry = grid)  # Ensure it's an sf object
+
+# Convert both points and grid to Spatial (gstat prefers sp format)
+pts_sp <- as(geochem_sf_transformed, "Spatial")
+grid_sp <- as(grid_sf, "Spatial")
+
 ## 5. define function to interpolate and extract values
 extract_soil_geochem <- function(chemName) {
   message(paste("Processing:", chemName))
-  geochemOut <- as(geochem_sf_transformed, "Spatial")
-  r <- raster(extent(geochemOut), res = 1000, crs = proj4string(geochemOut))  # 1km grid
-  r <- rasterizefromXYZ(geochemOut, r, field = chemName, fun = mean)
-  result <- exact_extract(r, nc_grid, 'mean')
+  pts_sp_clean <- pts_sp[!is.na(pts_sp[[chemName]]), ]
+  
+  # Fit inverse-distance weighting model and predict
+  idw_model <- gstat(formula =  as.formula(paste(chemNameList, "~ 1")), data = pts_sp_clean)
+  predicted <- predict(idw_model, newdata = grid_sp)
+  
+  r <- rasterize(vect(st_as_sf(predicted)), #vector
+                 rast(vect(st_as_sf(predicted)), res = cellsize), #raster
+                 field = "var1.pred")
+  result <- exact_extract(r, nc_grid, "mean")
   return(result)
 }
+
 #test here to make sure that the function works, before scaling up to all the items
 A_Sb_result <- extract_soil_geochem(chemName = 'A_Sb')
+summary(A_Sb_result)
 
+## Cindy finished here, Kyndra to pick up from here.
 ## 6. apply function across all chemical variables
 results_list <- mclapply(chemNameList, extract_soil_geochem, mc.cores = 6) # running here
 names(results_list) <- chemNameList
