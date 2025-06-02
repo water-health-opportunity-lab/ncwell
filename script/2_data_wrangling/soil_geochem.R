@@ -7,12 +7,9 @@
 library(tidyverse)
 library(sf)
 library(readxl)
-library(janitor)
-library(raster)
 library(terra)
 library(gstat)
 library(exactextractr)
-library(parallel)
 
 ## 1. read in NC grid shapefile
 nc_grid <- st_read("data/output/nc_grid/nc_grid.shp")
