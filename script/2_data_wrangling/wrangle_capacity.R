@@ -93,7 +93,7 @@ sf_acs_block_group_reprojected <- st_transform(sf_acs_block_group, st_crs(nc_gri
 # This gives each centroid the value of the polygon it falls in
 nc_centroids_joined_block_group <- st_join(nc_centroids, sf_acs_block_group_reprojected) %>%
   st_drop_geometry() %>%
-  dplyr::select(grid_id, block_group_name = name, starts_with(c('pct_','total_')))
+  dplyr::select(grid_id, block_group_name = name, starts_with(c('pct_','pop_','housing_','households_')))
 
 # 5. Merge the joined values back into the original grid
 nc_grid <- nc_grid %>%
@@ -102,8 +102,8 @@ nc_grid <- nc_grid %>%
   select(-"tract_name")
 
 # check the result
-# summary(nc_grid$pct_poverty)
-# plot(nc_grid['pct_poverty'], border = NA)
+# summary(nc_grid$pop_density)
+# plot(nc_grid['pop_density'], border = NA)
 
 #WRITE OUT RESULTS 
 st_write(nc_grid, "data/output/nc_grid_capacity.gpkg", layer = "capacity", delete_layer = TRUE)
