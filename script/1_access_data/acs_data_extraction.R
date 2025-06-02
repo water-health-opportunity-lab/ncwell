@@ -31,12 +31,14 @@
 #   - # Households
 #
 # Author: Jennifer Zhang
-# Last edited: 2025-04-25
+# Last edited: 2025-06-01
 # ----------------------------------------
 
 # Load packages
 library(tidycensus)
 library(tidyverse)
+library(dplyr)
+library(sf)
 
 # Set your Census API key, save your API key in .Renviron, don't save it in script.
 census_api_key(Sys.getenv("CENSUS_API_KEY"), install = FALSE)
@@ -105,7 +107,7 @@ acs_processed_tract <- acs_tract_data %>%
     pct_gov_workers = 100 * (local_govE + state_govE + fed_govE) / total_workers_over_16E,
   )
 
-# View block group results
+# View tract results
 View(acs_processed_tract)
 write.csv(acs_processed_tract, "acs_tract.csv")
 
@@ -121,7 +123,7 @@ block_group_vars <- c(
   multi_pop = "B02001_008",
 
   # pct_single_parent
-  total_households = "B11003_001",
+  total_families = "B11003_001",
   male_no_spouse = "B11003_010",
   female_no_spouse = "B11003_016",
   
@@ -167,11 +169,11 @@ block_group_vars <- c(
   r_above_2.01 = "B25014_013",
   
   # pct_new_home
-  total_housing = "B25034_001",
+  total_housing_units = "B25034_001",
   built_2020_later = "B25034_002",
   built_2010_2019 = "B25034_003",
   
-  # pct_plumbing (use total_housing)
+  # pct_plumbing (use total_housing_units)
   complete_plumbing = "B25047_002",
   
   # pct_no_vehicle (use total_occupied_housing)
@@ -179,6 +181,7 @@ block_group_vars <- c(
   r_no_vehicle = "B25044_010",
   
   # pct_no_internet (use total_households)
+  total_households = "B28002_001",
   no_internet = "B28002_013",
   
   # pct_no_computer (use total_households)
@@ -192,8 +195,11 @@ acs_block_group_data <- get_acs(
   year = year,
   survey = "acs5",
   variables = block_group_vars,
-  output = "wide"
+  output = "wide", 
+  geometry = TRUE
 )
+
+acs_block_group_data <- st_as_sf(acs_block_group_data)
 
 # Calculate indicators at block group level
 acs_processed_block_group <- acs_block_group_data %>%
@@ -207,7 +213,7 @@ acs_processed_block_group <- acs_block_group_data %>%
     
     pct_limited_english = 100 * (limited_englishE / total_speakersE),
     
-    pct_single_parent = 100 * (female_no_spouseE + male_no_spouseE) / total_householdsE,
+    pct_single_parent = 100 * (female_no_spouseE + male_no_spouseE) / total_familiesE,
     
     pct_unemployed = 100 * (unemployedE / total_civilian_labor_forceE),
     
@@ -228,9 +234,9 @@ acs_processed_block_group <- acs_block_group_data %>%
       r_btwn_1.01_1.50E + r_btwn_1.51_2.00E + r_above_2.01E
       ) / total_occupied_housingE,
 
-    pct_plumbing = 100 * (complete_plumbingE / total_housingE),
+    pct_plumbing = 100 * (complete_plumbingE / total_housing_unitsE),
     
-    pct_new_home = 100 * (built_2020_laterE + built_2010_2019E) / total_housingE,
+    pct_new_home = 100 * (built_2020_laterE + built_2010_2019E) / total_housing_unitsE,
     
     pct_no_vehicle = 100 * (o_no_vehicleE + r_no_vehicleE) / total_occupied_housingE,
     
@@ -238,11 +244,11 @@ acs_processed_block_group <- acs_block_group_data %>%
     
     pct_no_computer = 100 * (no_computerE / total_householdsE),
     
-    total_popE, 
+    pop_density = total_popE / as.numeric(st_area(.) / 1e6), 
     
-    total_housingE,
+    housing_units_density = total_housing_unitsE / as.numeric(st_area(.) / 1e6),
     
-    total_householdsE
+    households_density = total_householdsE / as.numeric(st_area(.) / 1e6)
   )
 
 # View block group results
