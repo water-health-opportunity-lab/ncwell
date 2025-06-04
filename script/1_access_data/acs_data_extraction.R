@@ -198,7 +198,9 @@ acs_block_group_data <- get_acs(
   geometry = TRUE
 )
 
-acs_block_group_data <- st_as_sf(acs_block_group_data)
+# Transform to UTM Zone 17N (EPSG:26917)
+acs_block_group_data <- st_transform(acs_block_group_data, 26917) %>%
+  mutate(area_km2 = as.numeric(st_area(.)) / 1e6)
 
 # Calculate indicators at block group level
 acs_processed_block_group <- acs_block_group_data %>%
@@ -243,11 +245,11 @@ acs_processed_block_group <- acs_block_group_data %>%
     
     pct_no_computer = 100 * (no_computerE / total_householdsE),
     
-    pop_density = total_popE / as.numeric(st_area(.) / 1e6), 
+    pop_density = total_popE / area_km2, 
     
-    housing_units_density = total_housing_unitsE / as.numeric(st_area(.) / 1e6),
+    housing_units_density = total_housing_unitsE / area_km2,
     
-    households_density = total_householdsE / as.numeric(st_area(.) / 1e6)
+    households_density = total_householdsE / area_km2
   )
 
 # View block group results
