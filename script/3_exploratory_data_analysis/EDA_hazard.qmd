@@ -12,7 +12,7 @@ self-contained: true
 The below is a highlight for this exploratory data analysis of hazard module.
 
 1.  **There are a lot of missing values for Satellite-based inundation map.**
-2.  We found many outliers for (1) Satellite-based inundation map, (2) CAFOs, (3) TRI water impact, (4) TRI total impact, (5) Onsite Wastewater Treatment Systems (OWTS), and (6) Agricultural Runoff. It appears that applying square root transformation helps resolve this issue except for OWTS and CAFOs. Instead, a log transformation works for OWTS and log10 transformation works for CAFOs.
+2.  We observe some outliers in the variables. For most of the variables, log transformation (or log10) or square root transformation works well. However, for Agricultural runoff, top coding is used to improve this issue.
 3.  We observe some spatial patterns of the variables in this dataset.
 4.  We do not observe any multicollinearity in this dataset.
 
@@ -130,16 +130,24 @@ names(outlier.percent) <- names1
 print(round(outlier.percent, 2))
 ```
 
-Next, we check if square root transformation helps. The idea is to cover a desired proportion of data (say, 98%) of normally behaved data under some transformation. As we can see below, square root transformation helps.
+Next, we check if square root transformation or log transformation helps. The idea is to cover a desired proportion of data (say, 98%) of normally behaved data under some transformation. As we can see below, square root transformation helps.
 
 ```{r}
-oc.check <- function(x, level = .99, method = 'log') {
+oc.check <- function(x, level = .99, method = 'power', degree) {
   x[which(x == Inf)] <- NA
+  x <- na.omit(x)
   cv <- qnorm(level)
   if (method == 'log') {
     x <- log(na.omit(x) + 1e-4)
   } else if (method == 'sqrt') {
     x <- sqrt(x)
+  } else if (method == 'boxcox') {
+    fit <- lm(x ~ 1)
+    bc <- boxcox(fit, lambda = seq(2, 10, 0.1))
+    best_lambda <- bc$x[which.max(bc$y)]
+    x <- (x ^ best_lambda - 1) / best_lambda
+  } else if (method == 'power') {
+    x <- x ^ (degree)
   } else if (method == 'log10') {
     x <- log10(x + 1e-4)
   }
@@ -147,14 +155,17 @@ oc.check <- function(x, level = .99, method = 'log') {
   length(which(x > mean(x) + cv * sd(x) | x < mean(x) - cv * sd(x))) / n
 }
 
-oc.check(data$inundation, method = 'sqrt')
+oc.check(data$inundation, method = 'log')
 oc.check(data$sems_impact, method = 'sqrt')
+
+x1.trans <- cbind(log(data$inundation + 1e-4),
+                  sqrt(data$sems_impact))
 ```
 
 Next, we take a look at the spatial distribution of those two variables. For superfund, most of the regions have zero values with a few spots being greater than zero.
 
 ```{r}
-ggplot(data = data) + geom_sf(aes(color = sqrt(inundation))) + 
+ggplot(data = data) + geom_sf(aes(color = log(inundation + 1e-4))) + 
   theme_bw() + labs(title = "Satellite-based inundation map") + 
   theme(panel.grid = element_blank()) +
   scale_color_gradient(low = "deepskyblue", high = "magenta", 
@@ -253,6 +264,10 @@ oc.check(data$cafo_impact, method = 'log10')
 oc.check(data$TRI.water.releases, method = 'log10')
 # TRI total impact 
 oc.check(data$TRI.total.releases, method = 'log10')
+
+x2.trans <- cbind(log10(data$cafo_impact + 1e-4),
+                  sqrt(data$TRI.water.releases),
+                  sqrt(data$TRI.total.releases))
 ```
 
 Next, we take a look at the spatial distribution of those three variables. For TRI total impact and TRI water impact, most of the regions are flat around zero but with a few spots greater than zero. For CAFOs, we see the high values are mostly around the southeastern regions.
@@ -338,17 +353,37 @@ names(outlier.percent) <- names3[1:2]
 print(round(outlier.percent, 2))
 ```
 
-Similarly, we check whether we can apply some transformation to avoid this issue. For OWTS, we notice that log transformation works while square root transformation does not work. For agricultural runoff, square root transformation works while log transformation does not work
+Similarly, we check whether we can apply some transformation to avoid this issue. For OWTS, we notice that log transformation works while square root transformation does not work. For agricultural runoff, both of them do not work.
 
 ```{r}
 # Sex
 oc.check(data$owts, method = 'log')
 oc.check(data$owts, method = 'sqrt')
 
-# Seniors
+# agricultural runoff 
 oc.check(data$ag_runoff, method = 'log')
 oc.check(data$ag_runoff, method = 'sqrt')
 ```
+
+After applying top coding, it appears more well-behaved.
+
+```{r}
+top.code <- function(x, alpha = 0.02) {
+  lt <- quantile(x, alpha, na.rm = TRUE)
+  rt <- quantile(x, 1 - alpha, na.rm = TRUE)
+  x[which(x < lt)] <- lt
+  x[which(x > rt)] <- rt
+  return(x)
+}
+x3.2.trans <- top.code(data$ag_runoff)
+oc.check(x3.2.trans, method = 'power', degree = 1) * 100
+hist(x3.2.trans, col = 'white', border = 'magenta',
+     main = 'Agricultural runoff', xlab = '')
+x3.trans <- cbind(log(data$owts + 1e-4), 
+                  x3.2.trans)
+```
+
+Next, we try if we can use top coding to resolve
 
 Next, we take a look at the spatial distribution of the transformed variables.
 
@@ -365,8 +400,8 @@ ggplot(data = data) + geom_sf(aes(color = log(owts + 1e-4))) +
   scale_color_gradient(low = "deepskyblue", high = "magenta", 
                        name = '',
                        na.value = 'grey')
-ggplot(data = data) + geom_sf(aes(color = sqrt(ag_runoff))) + 
-  theme_bw() + labs(title = "Agricultural runoff (Square root)") + 
+ggplot(data = data) + geom_sf(aes(color = x3.trans[, 2])) + 
+  theme_bw() + labs(title = "Agricultural runoff (Transformed)") + 
   theme(panel.grid = element_blank()) +
   scale_color_gradient(low = "deepskyblue", high = "magenta", 
                        name = '',
@@ -385,9 +420,8 @@ In this section, we check multicollinearity of all the variables. As we can see,
 
 ```{r}
 vifs <- c()
-vars <- as.data.frame(data[, -c(1:2, 11)])
-vars <- vars[, -9]
-for (j in 1:8) {
+vars <- cbind(x1.trans, x2.trans, x3.trans)
+for (j in 1:7) {
   y.j <- unlist(vars[, j])
   x.j <- vars[, -j]
   y.j[which(y.j == Inf)] <- NA
@@ -398,7 +432,6 @@ names(vifs) <- c('Satelite-based inundation map',
                  'Superfund', 'CAFOs',
                  'TRI water impact', 
                  'TRI total impact', 'Onsite Wastewater Treatment Systems',
-                 'Agricultural Runoff', 
-                 'FEMA Floodplain')
+                 'Agricultural Runoff')
 print(round(vifs, 2))
 ```
