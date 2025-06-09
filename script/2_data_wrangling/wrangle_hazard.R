@@ -11,7 +11,7 @@
 #   - floodplain map
 #
 # Author: Xindi Hu & Kyndra Shea
-# Last edited: 2025-05-13
+# Last edited: 2025-06-08
 # ----------------------------------------
 # read in helper function
 source(here::here("script/2_data_wrangling/helper_functions.R"))
@@ -22,21 +22,30 @@ source(here::here("script/2_data_wrangling/helper_functions.R"))
 # read in nc_grid, the common base grid for North Carolina
 nc_grid <- st_read("data/output/nc_grid/nc_grid.shp")
 
-## 2. read in raster
-# read in flood inundation raster
-flood_inundation_raster <- rast("data/input/Satellite-based inundation map/Flood_NC_2024092721.tif")
+## 2. read in rasters
+# read in 40 flood inundation rasters
+tif_files <- list.files("data/input/Satellite-based inundation map/", 
+                        pattern = "^Flood_NC_.*\\.tif$", full.names = TRUE)
 
 ## 3. align CRS
-# reproject raster to match the coordinate reference system of nc_grid
-flood_inundation_raster_reprojected <- project(flood_inundation_raster, vect(nc_grid), method = "bilinear")
+# reproject rasters to match the coordinate reference system of nc_grid
+reprojected_rasters <- lapply(tif_files, function(file) {
+  r <- rast(file)
+  project(r, vect(nc_grid), method = "bilinear")
+})
 
-## 4. extract raster values using mean per polygon
-# exactextractr handles partial overlaps and weighting
-# variable name "inundation" needs to match what is in the tracker on OneDrive
-nc_grid$inundation <- exact_extract(flood_inundation_raster_reprojected, nc_grid, 'mean')
+## 4. stack the rasters and calculate max across layers
+# combine into a SpatRaster stack
+r_stack <- rast(reprojected_rasters)
+
+# use terra::app to compute max across all raster layers (ignoring NA)
+r_max <- app(r_stack, fun = max, na.rm = TRUE)
+
+## 5. extract max value per grid cell
+nc_grid$inundation_max <- exact_extract(r_max, nc_grid, 'mean')
 
 # check the result
-summary(nc_grid$inundation)
+summary(nc_grid$inundation_max)
 
 ### EXTRACT IMPACTS FROM SUPERFUND SITES
 
@@ -128,13 +137,13 @@ with_progress({
     grid_sf = nc_grid,
     threshold_m = 5000,
     weight_var = "water_releases_lb",
-    output_var = "TRI.water.releases"
+    output_var = "tri_water_releases"
   )
 })
 
 # full run takes 2177 seconds
 # check result
-summary(nc_grid$TRI.water.releases)
+summary(nc_grid$tri_water_releases)
 
 ### EXTRACT IMPACTS FROM TRI TOTAL RELEASES
 
@@ -156,13 +165,13 @@ with_progress({
     grid_sf = nc_grid,
     threshold_m = 5000,
     weight_var = "total_on_site_releases_lb",
-    output_var = "TRI.total.releases"
+    output_var = "tri_total_releases"
   )
 })
 
 # full run takes 1797 seconds
 # check result
-summary(nc_grid$TRI.total.releases)
+summary(nc_grid$tri_total_releases)
 
 ### EXTRACT IMPACTS FROM ONSITE WASTEWATER TREATMENT SYSTEMS
 
@@ -265,15 +274,15 @@ flood_100yr_reprojected <- st_transform(flood_100yr, st_crs(nc_grid))
 # This gives each centroid the value of the polygon it falls in
 nc_centroids_joined <- st_join(nc_centroids, flood_100yr_reprojected, left = TRUE) %>%
   st_drop_geometry() %>%
-  mutate(fema.floodplain = !is.na(ZONE_LID)) %>%
-  select(grid_id, fema.floodplain)
+  mutate(fema_floodplain = !is.na(ZONE_LID)) %>%
+  select(grid_id, fema_floodplain)
 
 # 5. Merge the joined values back into the original grid
 nc_grid <- nc_grid %>%
   left_join(nc_centroids_joined, by = "grid_id")
 
 # check the result
-table(nc_grid$fema.floodplain, useNA = "ifany")
+table(nc_grid$fema_floodplain, useNA = "ifany")
 
 # WRITE OUT RESULTS 
 st_write(nc_grid, "data/output/nc_grid_hazard.gpkg", layer = "hazard", delete_layer = TRUE)
