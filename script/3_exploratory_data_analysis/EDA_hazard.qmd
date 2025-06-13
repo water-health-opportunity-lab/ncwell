@@ -12,7 +12,7 @@ self-contained: true
 The below is a highlight for this exploratory data analysis of hazard module.
 
 1.  **There are a lot of missing values for Satellite-based inundation map.**
-2.  We observe some outliers in the variables. For most of the variables, log transformation (or log10) or square root transformation works well. However, for Agricultural runoff, top coding is used to improve this issue.
+2.  We observe some outliers in the variables. For most of the variables, log transformation (or log10) or square root transformation works well. However, for Agricultural runoff, both top coding and bottom coding are used to resolve this issue.
 3.  We observe some spatial patterns of the variables in this dataset.
 4.  We do not observe any multicollinearity in this dataset.
 
@@ -365,17 +365,26 @@ oc.check(data$ag_runoff, method = 'log')
 oc.check(data$ag_runoff, method = 'sqrt')
 ```
 
-After applying top coding, it appears more well-behaved.
+Since there are outliers on both left and right tails, we apply both bottom coding and top coding on agricultural runoff. After applying this, it appears more well-behaved.
 
 ```{r}
-top.code <- function(x, alpha = 0.02) {
+coding <- function(x, alpha = 0.02, 
+                     tail = c('left', 'right', 'both')) {
   lt <- quantile(x, alpha, na.rm = TRUE)
   rt <- quantile(x, 1 - alpha, na.rm = TRUE)
-  x[which(x < lt)] <- lt
-  x[which(x > rt)] <- rt
+  
+  if (tail == 'left') {
+    x[which(x < lt)] <- lt
+  } else if (tail == 'right') {
+    x[which(x > rt)] <- rt
+  } else {
+    x[which(x < lt)] <- lt
+    x[which(x > rt)] <- rt
+  }
+  
   return(x)
 }
-x3.2.trans <- top.code(data$ag_runoff)
+x3.2.trans <- coding(data$ag_runoff, tail = 'both')
 oc.check(x3.2.trans, method = 'power', degree = 1) * 100
 hist(x3.2.trans, col = 'white', border = 'magenta',
      main = 'Agricultural runoff', xlab = '')
