@@ -11,10 +11,9 @@ self-contained: true
 
 The below is a highlight for this exploratory data analysis of capacity module.
 
-1.  There exists serious multicollinearity for Population size and Households. Removing one of them from the pool of variables should resolve this problem.
-2.  We found many outliers for (1) English proficiency, (2) Nativity, (3) Active commuting, (4) Crowded housing, and (5) Plumbing. Domain knowledge may be needed to deal with those outliers. It appears that **applying square root transformation helps** resolve this issue.
-3.  We do not observe many missing entries in this dataset.
-4.  There exist Infinite values in Internet and Computer. They are supposed to be in percentage.
+1.  We found outliers in some variables. Applying square root transformation or log transformation helps. However, the outliers may still be alarming after transformation. In this case, bottom coding or top coding (or both) is applied depending on whether there are outliers on the left and right tail. It is defined as setting the values above 98% percentile as 98 percentile (top coding) or those below 2% percentile as 2% (bottom coding). The histograms are provided in this case.
+2.  It may be a better idea to transform English proficiency into a binary variable as it is zero-inflated.
+3.  There exists multicollinearity among the set of transformed variables. If we remove Households and Population size from the set of variables, the multicollinearity problem will not be of concern.
 
 The sample size of this dataset is 129169 and it has 25 variables.
 
@@ -33,6 +32,11 @@ data <- st_read('nc_grid_capacity.gpkg')
 
 # colnames
 colnames(data)
+
+# some transformation
+for (j in 4:28) {
+  data[[j]] <- as.numeric(data[[j]])
+}
 ```
 
 Next, we look into the variables in different groups.
@@ -85,22 +89,8 @@ summary.race <- data.frame(Name = name.race,
                            IQR = iqr.race)
 
 print(summary.race)
-```
-
-Next, we investigate if there is a multicollinearity between the variables in the group in the Race/ethnicity group. According to the results of VIFs below, we don't see any problems under a rule of thumb of 5.
-
-```{r}
 race <- data.frame(data$pct_minority,
                    data$pct_limited_english)
-vifs.race <- c()
-for (j in 1:2) {
-  y.j <- race[, j]
-  x.j <- race[, -j]
-  mod <- lm(y.j ~ x.j)
-  vifs.race[j] <- 1 / (1 - summary(mod)$r.squared)
-}
-names(vifs.race) <- name.race
-print(round(vifs.race, 2))
 ```
 
 The histograms of those two variables are presented below. Both of them are right-skewed but English proficiency is highly right-skewed.
@@ -147,30 +137,75 @@ names(outlier.percent) <- name.race
 print(round(outlier.percent, 2))
 ```
 
-In terms of English proficiency, we check its distribution on the right tail below. It may be a good idea to transform it into an ordered binary variable.Or alternatively, we may check if log transformation and square root transformation helps. As we can see below, square root transformation helps.
+In terms of English proficiency, we check its distribution on the right tail below. It may be a good idea to transform it into an ordered binary variable.
 
 ```{r}
 quantile(na.omit(data$pct_limited_english), c(.8, .85, .9, .95))
 summary(ifelse(data$pct_limited_english > 0, 1, 0))
+data$bv_limited_english <- ifelse(data$pct_limited_english > 0, 1, 0)
 
-oc.check <- function(x, level = .99, method = 'log') {
+oc.check <- function(x, level = .99, method = 'power', degree) {
   x[which(x == Inf)] <- NA
+  x <- na.omit(x)
   cv <- qnorm(level)
   if (method == 'log') {
     x <- log(na.omit(x) + 1e-4)
   } else if (method == 'sqrt') {
     x <- sqrt(x)
+  } else if (method == 'boxcox') {
+    fit <- lm(x ~ 1)
+    bc <- boxcox(fit, lambda = seq(2, 10, 0.1))
+    best_lambda <- bc$x[which.max(bc$y)]
+    x <- (x ^ best_lambda - 1) / best_lambda
+  } else if (method == 'power') {
+    x <- x ^ (degree)
+  } else if (method == 'log10') {
+    x <- log10(x + 1e-4)
   }
   n <- length(x)
   length(which(x > mean(x) + cv * sd(x) | x < mean(x) - cv * sd(x))) / n
 }
 
-oc.check(data$pct_limited_english, method = 'log')
-oc.check(data$pct_limited_english, method = 'sqrt')
+coding <- function(x, alpha = 0.02, 
+                     tail = c('left', 'right', 'both')) {
+  lt <- quantile(x, alpha, na.rm = TRUE)
+  rt <- quantile(x, 1 - alpha, na.rm = TRUE)
+  
+  if (tail == 'left') {
+    x[which(x < lt)] <- lt
+  } else if (tail == 'right') {
+    x[which(x > rt)] <- rt
+  } else {
+    x[which(x < lt)] <- lt
+    x[which(x > rt)] <- rt
+  }
+  
+  return(x)
+}
+x1.trans <- race
 ```
 
-```         
+Next, we check the spatial distribution of those two variables below.
 
+```{r}
+require('ggplot2')
+ggplot(data = data) + geom_sf(aes(color = pct_minority)) + 
+  theme_bw() + labs(title = "Minority") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) +
+  geom_sf(aes(color = as.factor(bv_limited_english), 
+              fill = as.factor(bv_limited_english)), size = 0.5) +
+  scale_fill_manual(values = c("magenta", "deepskyblue")) +
+  scale_color_manual(values = c("magenta", "deepskyblue")) +
+  theme_bw() +
+  labs(title = 'Lack of English Proficiency (Binary)', 
+       fill = 'Lack of English Proficiency (Binary)',
+       color = 'Lack of English Proficiency (Binary)') +
+  theme(panel.grid = element_blank())
 ```
 
 ### **2.2 Socioeconomic**
@@ -228,27 +263,14 @@ summary.socioeco <- data.frame(Name = name.socioeco,
                            IQR = iqr.socioeco)
 
 print(summary.socioeco)
-```
-
-Next, we investigate whether there exists a multicolinearity among those variables. Using a rule of thumb of 5, there exist no serious multicolinearity in the socioeconomic group.
-
-```{r}
 require('car')
 socioeco <- data.frame(data$pct_single_parent,
                        data$pct_unemployed, 
                        data$pct_no_college,
                        data$pct_poverty)
-vifs.socioeco <- c()
-for (j in 1:4) {
-  y.j <- socioeco[, j]
-  x.j <- socioeco[, -j]
-  mod <- lm(y.j ~ ., data = x.j)
-  vifs.socioeco[j] <- 1 / (1 - summary(mod)$r.squared)
-}
-names(vifs.socioeco) <- name.socioeco
-print(round(vifs.socioeco, 2))
-
 ```
+
+The histograms of the variables in the socioeconomic group are shown below.
 
 ```{r}
 par(mfrow = c(2, 2))
@@ -318,6 +340,49 @@ oc.check(data$pct_no_college, method = 'log')
 oc.check(data$pct_no_college, method = 'sqrt')
 ```
 
+Either transformation works for Unemployment and Single-parent. Next, we check if top coding works for Education. As we can see below, after such treatment, the distribution of Education appears well-behaved.
+
+```{r}
+# Education
+x2.3.trans <- coding(sqrt(data$pct_no_college), tail = 'right')
+oc.check(x2.3.trans, method = 'power', degree = 1) * 100
+hist(x2.3.trans, col = 'white', border = 'magenta',
+     main = name.socioeco[3], xlab = '')
+x2.trans <- cbind(log(data$pct_single_parent + 1e-4), 
+                  log(data$pct_unemployed + 1e-4), 
+                  x2.3.trans, data$pct_poverty)
+```
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = x2.trans[, 1])) + 
+  theme_bw() + labs(title = paste0(name.socioeco[1], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x2.trans[, 2])) + 
+  theme_bw() + labs(title = paste0(name.socioeco[2], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x2.trans[, 3])) + 
+  theme_bw() + labs(title = paste0(name.socioeco[3], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x2.trans[, 4])) + 
+  theme_bw() + labs(title = paste0(name.socioeco[4])) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+```
+
 ### **2.3 Health risk**
 
 The summary statistics of the variables in the health risk group are presented below.
@@ -378,26 +443,13 @@ summary.health.risk <- data.frame(Name = name.health.risk,
                            IQR = iqr.health.risk)
 
 print(summary.health.risk)
-```
 
-Next, we investigate whether there exists a multicolinearity among those variables. Using a rule of thumb of 5, there exist no serious multicolinearity in the health risk group.
-
-```{r}
 require('car')
 health.risk <- data.frame(data$pct_women,
                           data$pct_over_65, 
                           data$pct_under_17,
                           data$pct_women_gave_birth,
                           data$pct_insured)
-vifs.health.risk <- c()
-for (j in 1:5) {
-  y.j <- health.risk[, j]
-  x.j <- health.risk[, -j]
-  mod <- lm(y.j ~ ., data = x.j)
-  vifs.health.risk[j] <- 1 / (1 - summary(mod)$r.squared)
-}
-names(vifs.health.risk) <- name.health.risk
-print(round(vifs.health.risk, 2))
 ```
 
 Next, we check the histogram of the variables in the health risk group.
@@ -467,24 +519,77 @@ names(outlier.percent) <- name.health.risk
 print(round(outlier.percent, 2))
 ```
 
-Similarly, we check whether we can apply some transformation to avoid this issue. As we can see, we may need to consider square root transformation for Health insurance. For Sex, Seniors, and Pregnancy, either one works well.
+Similarly, we check whether we can apply some transformation to avoid this issue. As we can see,
+
+1.  log transformation works for Sex, Seniors, Pregnancy
+2.  log or square root transformation does not work for Health insurance.
 
 ```{r}
 # Sex
-oc.check(data$pct_women, method = 'log')
-oc.check(data$pct_women, method = 'sqrt')
+oc.check(data$pct_women, method = 'log') 
 
 # Seniors
-oc.check(data$pct_over_65, method = 'log')
-oc.check(data$pct_over_65, method = 'sqrt')
+oc.check(data$pct_over_65, method = 'log') 
 
 # Pregnancy
-oc.check(data$pct_women_gave_birth, method = 'log')
-oc.check(data$pct_women_gave_birth, method = 'sqrt')
+oc.check(data$pct_women_gave_birth, method = 'log') 
 
 # Health insurance
 oc.check(data$pct_insured, method = 'log')
 oc.check(data$pct_insured, method = 'sqrt')
+```
+
+Since outliers are mainly on the left for Health Insurance, we try if using bottom coding helps. According to the histogram below, we can see that the transformed variable appears more well-behaved.
+
+```{r}
+x3.5.trans <- coding(log(data$pct_insured + 1e-4), tail = 'left')
+oc.check(x3.5.trans, method = 'power', degree = 1) * 100
+hist(x3.5.trans, col = 'white', border = 'magenta',
+     main = name.health.risk[5], xlab = '')
+x3.trans <- cbind(log(data$pct_women + 1e-4), 
+                  log(data$pct_over_65 + 1e-4), 
+                  data$pct_under_17,
+                  log(data$pct_women_gave_birth + 1e-4), 
+                  x3.5.trans)
+```
+
+Next, we visualize the spatial distribution of those variables below.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = x3.trans[, 1])) + 
+  theme_bw() + labs(title = paste0(name.health.risk[1], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x3.trans[, 2])) + 
+  theme_bw() + labs(title = paste0(name.health.risk[2], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x3.trans[, 3])) + 
+  theme_bw() + labs(title = paste0(name.health.risk[3])) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x3.trans[, 4])) + 
+  theme_bw() + labs(title = paste0(name.health.risk[4], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x3.trans[, 5])) + 
+  theme_bw() + labs(title = paste0(name.health.risk[5], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
 ```
 
 ### **2.4 Immigration status**
@@ -546,11 +651,31 @@ names(outlier.percent) <- name.is
 print(round(outlier.percent, 2))
 ```
 
-Similarly, we check whether applying log transformation or square root transformation works. As we can see, square root transformation works well.
+Similarly, we check whether applying some transformation helps. As we may observe, there are still some outliers.
 
 ```{r}
 oc.check(data$pct_us_born, method = 'log')
 oc.check(data$pct_us_born, method = 'sqrt')
+```
+
+Since the outliers of Nativity are mainly on the left, we apply bottom coding. As we can see, after bottom coding, the distribution of the transformed Nativity looks more well-behaved.
+
+```{r}
+x4.trans <- coding(log(data$pct_us_born + 1e-4), tail = 'left')
+oc.check(x4.trans, method = 'power', degree = 1) * 100
+hist(x4.trans, col = 'white', border = 'magenta',
+     main = name.is[1], xlab = '')
+```
+
+Last, we check its spatial distribution below.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = x4.trans)) + 
+  theme_bw() + labs(title = paste0(name.is[1], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
 ```
 
 ### **2.5 Social cohesion**
@@ -585,20 +710,6 @@ x.social.cohesion <- cbind(data$pct_owner_occupied, data$pct_active_commuting,
 summ(x = x.social.cohesion, names = names.social.cohesion)
 ```
 
-Then, we check the VIFs of the variables in the social cohesion group. As we can see, we do not observe serious multicollinearity below.
-
-```{r}
-vifs.social.cohesion <- c()
-for (j in 1:3) {
-  y.j <- x.social.cohesion[, j]
-  x.j <- x.social.cohesion[, -j]
-  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
-  vifs.social.cohesion[j] <- 1 / (1 - summary(mod)$r.squared)
-}
-names(vifs.social.cohesion) <- names.social.cohesion
-print(round(vifs.social.cohesion, 2))
-```
-
 Next, we look at the histograms and boxplots of the variables in the social cohesion group. As we may observe, the distributions of active commuting, government jobs are right-skewed while those of Homeownership rate and geographical mobility are left-skewed. Among them, active commuting may have more extreme outliers than others.
 
 ```{r}
@@ -627,20 +738,55 @@ names(outlier.percent) <- names.social.cohesion
 print(round(outlier.percent, 2))
 ```
 
-Next, we check whether we can do some transformation to avoid the outliers. According to the results below, we may want to consider square root transformation for geographical mobility. While for the homeownership and active commuting, either works well.
+Next, we check whether we can do some transformation to avoid the outliers. From the results below, we see that log transformation works for Homeownership and Active commuting. However, either log or square root transformation does not work for Homeownership.
 
 ```{r}
 # Homeownership
-oc.check(data$pct_owner_occupied, method = 'log')
-oc.check(data$pct_owner_occupied, method = 'sqrt')
+oc.check(data$pct_owner_occupied, method = 'log') 
 
 # Active commuting
-oc.check(data$pct_active_commuting, method = 'log')
-oc.check(data$pct_active_commuting, method = 'sqrt')
+oc.check(data$pct_active_commuting, method = 'log') 
 
 # Geographical mobility
 oc.check(data$pct_no_move, method = 'log')
 oc.check(data$pct_no_move, method = 'sqrt')
+```
+
+Since outliers are mainly on the left for geographical mobility, we check if bottom coding works for Geographical mobility. As we can see, the transformed variable looks more well-behaved.
+
+```{r}
+x5.3.trans <- coding(sqrt(data$pct_no_move), tail = 'left')
+oc.check(x5.3.trans, method = 'power', degree = 1) * 100
+hist(x5.3.trans, col = 'white', border = 'magenta',
+     main = names.social.cohesion[3], xlab = '')
+x5.trans <- cbind(log(data$pct_owner_occupied + 1e-4), 
+                  log(data$pct_active_commuting + 1e-4), 
+                  x5.3.trans)
+```
+
+Next, we visualize its spatial distribution below.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = x5.trans[, 1])) + 
+  theme_bw() + labs(title = paste0(names.social.cohesion[1], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x5.trans[, 2])) + 
+  theme_bw() + labs(title = paste0(names.social.cohesion[2], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x5.trans[, 3])) + 
+  theme_bw() + labs(title = paste0(names.social.cohesion[3], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
 ```
 
 ### **2.6 Institution Capacity**
@@ -658,7 +804,7 @@ Next, we check its histogram and boxplot of institution capacity below. As we ca
 ```{r}
 par(mfrow = c(1, 2))
 hist(x.ic, 
-       col = 'white', border = cols[1],
+       col = 'white', border = cols[1], main = '',
        xlab = names.ic[j])
 boxplot(x.ic, 
           col = 'white', border = cols[1],
@@ -680,6 +826,7 @@ Next, we check whether we can do some transformation to resolve this issue. From
 # Government jobs
 oc.check(data$pct_gov_workers, method = 'log')
 oc.check(data$pct_gov_workers, method = 'sqrt')
+x6.trans <- sqrt(data$pct_gov_workers)
 ```
 
 ### **2.7 Built environment**
@@ -691,20 +838,6 @@ names.built.environment <- c('Crowded housing', 'Plumbing', 'Home age')
 x.built.environment <- cbind(data$pct_crowded_housing, data$pct_plumbing,
                            data$pct_new_home)
 summ(x = x.built.environment, names = names.built.environment)
-```
-
-Next, we check the multicollinearity among variables in the built environment group. Here, we do not observe serious multicollinearity problem.
-
-```{r}
-vifs.built.environment <- c()
-for (j in 1:3) {
-  y.j <- x.built.environment[, j]
-  x.j <- x.built.environment[, -j]
-  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
-  vifs.built.environment[j] <- 1 / (1 - summary(mod)$r.squared)
-}
-names(vifs.built.environment) <- names.built.environment
-print(round(vifs.built.environment, 2))
 ```
 
 Next, we look at the histograms and boxplots of the variables in the built environment group. As we may observe, the distributions of crowded housing and home age are left-skewed while that of Plumbing is right-skewed. And, there exist some extreme outliers for those variables. For example, for Plumbing, it has an extreme outlier being zero.
@@ -734,20 +867,49 @@ names(outlier.percent) <- names.built.environment
 print(round(outlier.percent, 2))
 ```
 
-Likewise, we check we can apply transformation to resolve this issue. We can see that only square root transformation works for home age. While for crowded housing and plumbing, either square root transformation or log transformation works well.
+Likewise, we check we can apply transformation to resolve this issue. We can see
+
+1.  log transformation works for Crowded housing and Plumbing.
+2.  square root transformation works for Home age.
 
 ```{r}
 # Crowded housing
-oc.check(data$pct_crowded_housing, method = 'log')
-oc.check(data$pct_crowded_housing, method = 'sqrt')
+oc.check(data$pct_crowded_housing, method = 'log') 
 
 # Plumbing
-oc.check(data$pct_plumbing, method = 'log')
-oc.check(data$pct_plumbing, method = 'sqrt')
+oc.check(data$pct_plumbing, method = 'log') 
 
 # Home age
-oc.check(data$pct_new_home, method = 'log')
 oc.check(data$pct_new_home, method = 'sqrt')
+
+x7.trans <- cbind(log(data$pct_crowded_housing + 1e-4),
+                  log(data$pct_plumbing + 1e-4),
+                  sqrt(data$pct_new_home))
+```
+
+Next, we visualize their spatial distribution below.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = x7.trans[, 1])) + 
+  theme_bw() + labs(title = paste0(names.built.environment[1], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x7.trans[, 2])) + 
+  theme_bw() + labs(title = paste0(names.built.environment[2], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x7.trans[, 3])) + 
+  theme_bw() + labs(title = paste0(names.built.environment[3], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
 ```
 
 ### **2.8 Other social determinants**
@@ -758,7 +920,8 @@ First, we check the summary statistics of the variables in this group. So, notic
 names.osd <- c('Vehicle ownership', 'Internet', 'Computer', 
                'Population size', 'Housing units', 'Households')
 x.osd <- cbind(data$pct_no_vehicle, data$pct_no_internet, data$pct_no_computer,
-               data$total_pop_e, data$total_housing_e, data$total_households_e)
+               data$pop_density, data$housing_units_density, 
+               data$households_density)
 summ(x = x.osd, names = names.osd)
 max(na.omit(data$pct_no_internet))
 max(na.omit(data$pct_no_computer))
@@ -788,32 +951,6 @@ summ.noinf <- function(x, names) {
   print(tab)
 }
 summ.noinf(x = x.osd, names = names.osd)
-```
-
-Next, we check the VIFs of those variables. Using a rule of thumb of 5, we can see that there exists serious multicollinearity problems for Households and Population size. We check their correlation below. As we can see, they are highly correlated. One of them may be needed to be excluded from the analysis.
-
-```{r}
-vifs.osd <- c()
-for (j in 1:6) {
-  y.j <- x.osd[, j]
-  x.j <- x.osd[, -j]
-  x.j[which(x.j == Inf)] <- NA
-  y.j[which(y.j == Inf)] <- NA
-  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
-  vifs.osd[j] <- 1 / (1 - summary(mod)$r.squared)
-}
-# check VIF
-names(vifs.osd) <- names.osd
-print(round(vifs.osd, 2))
-
-# compute correlations
-pop_size <- x.osd[, 4]
-household <- x.osd[, 6]
-
-# remove INF
-pop_size[which(pop_size == Inf)] <- NA
-household[which(household == Inf)] <- NA
-cor(na.omit(pop_size), na.omit(household))
 ```
 
 Next, we check the histograms and boxplots of the variables in this group. All the variables here are highly right-skewed, with outliers on the right.
@@ -851,32 +988,82 @@ names(outlier.percent) <- names.osd
 print(round(outlier.percent, 2))
 ```
 
-Similarly, we check we can apply transformation to resolve this issue. We can see that only square root transformation works for internet and computer. While for vehicle ownership, population size, housing units, and households, either square root transformation or log transformation works well.
+Similarly, we check we can apply transformation to resolve this issue. We can observe
+
+1.  log transformation works for Vehicle ownership, Population size, Housing units, and Households.
+2.  square root transformation works for Internet and Computer.
 
 ```{r}
 # Vehicle ownership
 oc.check(data$pct_no_vehicle, method = 'log')
-oc.check(data$pct_no_vehicle, method = 'sqrt')
 
 # Internet
-oc.check(data$pct_no_internet, method = 'log')
 oc.check(data$pct_no_internet, method = 'sqrt')
 
 # Computer
-oc.check(data$pct_no_computer, method = 'log')
 oc.check(data$pct_no_computer, method = 'sqrt')
 
 # Population size
-oc.check(data$total_pop_e, method = 'log')
-oc.check(data$total_pop_e, method = 'sqrt')
+oc.check(data$pop_density, method = 'log')
 
 # Housing units
-oc.check(data$total_housing_e, method = 'log')
-oc.check(data$total_housing_e, method = 'sqrt')
+oc.check(data$housing_units_density, method = 'log')
 
 # Households
-oc.check(data$total_households_e, method = 'log')
-oc.check(data$total_households_e, method = 'sqrt')
+oc.check(data$households_density, method = 'log')
+
+x8.trans <- cbind(log(data$pct_no_vehicle + 1e-4),
+                  sqrt(data$pct_no_internet),
+                  sqrt(data$pct_no_computer),
+                  log(data$pop_density + 1e-4),
+                  log(data$housing_units_density + 1e-4),
+                  log(data$households_density + 1e-4))
+```
+
+Next, we visualize their spatial distributions below.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = x8.trans[, 1])) + 
+  theme_bw() + labs(title = paste0(names.osd[1], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x8.trans[, 2])) + 
+  theme_bw() + labs(title = paste0(names.osd[2], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x8.trans[, 3])) + 
+  theme_bw() + labs(title = paste0(names.osd[3], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x8.trans[, 4])) + 
+  theme_bw() + labs(title = paste0(names.osd[4], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x8.trans[, 5])) + 
+  theme_bw() + labs(title = paste0(names.osd[5], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+
+ggplot(data = data) + geom_sf(aes(color = x8.trans[, 6])) + 
+  theme_bw() + labs(title = paste0(names.osd[6], ' (transformed)')) + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
 ```
 
 ## **3. Multicollinearity (Overall)**
@@ -884,18 +1071,19 @@ oc.check(data$total_households_e, method = 'sqrt')
 In this section, we check multicollinearity of all the variables. As we can see, the multicollinearity problems occur only for Households and Population size. After removing one of them, this problem should be resolved.
 
 ```{r}
+x.trans <- cbind(x1.trans, x2.trans, 
+                 x3.trans, x4.trans, 
+                 x5.trans, x6.trans,
+                 x7.trans, x8.trans)
 vifs <- c()
-vars <- as.data.frame(data[, -c(1:3, 29)])
-vars <- vars[, -26]
-vars[which(vars == Inf, arr.ind = TRUE)] <- NA
-for (j in 1:25) {
-  y.j <- unlist(vars[, j])
-  x.j <- vars[, -j]
+for (j in 1:ncol(x.trans)) {
+  y.j <- unlist(x.trans[, j])
+  x.j <- x.trans[, -j]
   y.j[which(y.j == Inf)] <- NA
   mod <- lm(y.j ~ ., data = as.data.frame(x.j))
   vifs[j] <- 1 / (1 - summary(mod)$r.squared)
 }
-names(vifs) <- c('Poverty status', 'Pregnancy', 'Health insurance',
+names(vifs) <- colnames(x.trans) <- c('Poverty status', 'Pregnancy', 'Health insurance',
                  'Nativity', 'Geographical mobility', 'Government jobs',
                  'Minority', 'English proficiency', 'Single-parent', 
                  'Unemployment', 'Education', 'Sex', 'Seniors', 
@@ -904,4 +1092,34 @@ names(vifs) <- c('Poverty status', 'Pregnancy', 'Health insurance',
                  'Internet', 'Computer', 'Population size', 'Housing units', 
                  'Households')
 print(round(vifs, 2))
+```
+
+As we can observe, there exist serious multicollinearity among those transformed variables. Next, we try to get a set of variables with VIFs smaller than 10. If we remove Households and Population size from the set of variables, the multicollinearity problem will not be of concern.
+
+```{r}
+vifs0 <- vifs
+pool <- 1:length(vifs)
+nn <- c()
+while (max(na.omit(vifs0)) > 10) {
+  vifs0 <- c()
+  pool <- 1:ncol(x.trans)
+  for (j in pool) {
+    y.j <- unlist(x.trans[, j])
+    x.j <- x.trans[, -j]
+    y.j[which(y.j == Inf)] <- NA
+    mod <- lm(y.j ~ ., data = as.data.frame(x.j))
+    vifs0[j] <- 1 / (1 - summary(mod)$r.squared)
+  }
+  if (max(na.omit(vifs0)) > 10) {
+    if (colnames(x.trans)[which.max(vifs0)] == 'Internet') {
+      nn <- c(nn, colnames(x.trans)[which(order(vifs0) == 2)])
+    } else {
+      nn <- c(nn, colnames(x.trans)[which.max(vifs0)])
+    }
+    x.trans <- x.trans[, - which.max(vifs0)]
+  }
+}
+# which variables to remove
+print(nn)
+print(vifs0)
 ```
