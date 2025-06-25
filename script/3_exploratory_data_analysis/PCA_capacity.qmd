@@ -1,0 +1,242 @@
+---
+title: "Principal Component Analysis for Capacity Module"
+format: html
+toc: true
+editor: visual
+code-fold: true
+self-contained: true
+---
+
+## Principal Component Analysis for Capacity Module
+
+### 1. Load packages and data
+
+First, we load the data below and prepare it for the analysis.
+
+```{r, warning=FALSE}
+# load packages
+library("MASS")
+library("dplyr")
+library("factoextra")
+library("exactextractr")
+library("tigris")
+library("ggplot2")
+library("plotly")
+library("sf")
+library("tibble")
+library("GGally")
+library("cluster")
+library("mclust")
+
+# read data
+data <- st_read('nc_grid_capacity_transformed.gpkg')
+
+# total sample size
+(n <- nrow(data))
+
+# dimension
+(p <- ncol(data) - 4)
+
+# make sure variables are numeric
+for (j in 4:26) {
+  data[[j]] <- as.numeric(data[[j]])
+}
+
+
+### drop the location information for easier modeling
+data_no_loc <- st_drop_geometry(data)
+data_no_loc <- data_no_loc[, -(1:3)]
+
+### Scale the data
+scaled_data <- scale(data_no_loc)
+colnames(scaled_data) <- c('Poverty status', 'Pregnancy', 'Health insurance',
+                           'Nativity', 'Geographical mobility', 'Government jobs',
+                           'Minority', 'English proficiency', 'Single-parent', 
+                           'Unemployment', 'Education', 'Sex', 'Seniors', 
+                           'Youth', 'Homeownership rate', 'Active computing', 
+                           'Crowded housing', 'Plumbing', 'Home age', 'Vehicle ownership',
+                           'Internet', 'Computer', 'Housing units')
+```
+
+### 2. PCA and Index Construction
+
+Next, we perform the PCA and check the proportion of variance explained by different PCs. As we can observe below, the first three PCs explained the majority of the variance of the data.
+
+```{r}
+### principal component analysis (PCA)
+pca <- prcomp(scaled_data, center = FALSE, scale. = FALSE)
+
+##################################### Scree plot
+fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
+  labs(title = "Scree Plot for Principal Component Analysis", 
+       x = "Principal Components", y = "Percentage of Variance Explained") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+```
+
+To interpret this PC, let us visualize the content of the first two PCs in terms of their contribution. For variable $j$ and PC $k$, the contribution of variable $j$ is defined as
+
+$$
+\mathrm{Contribution}_{jk} = \frac{l_{jk}^2}{\sum_{j=1}^p l_{jk}^2}
+$$
+
+where $l_{jk}$ is the loading of variable $j$ on PC $k$. So, the contribution of variable $j$ to the first $m$ PCs is defined as
+
+$$
+\mathrm{Contribution}_{j} = \sum_{k=1}^m \mathrm{Contribution}_{jk}
+$$
+
+Note that this contribution is irrevant to the directionality of the variables. The following plot presents the correlation between a variable and the PCs, where
+
+1.  the magnitude of contribution is presented in terms of red, where variables with redder color have more contribution.
+2.  if the arrows are closer to the PCs, it means the variables are more correlated with the PCs.
+3.  both x-axis and y-axis represent the correlation.
+
+```{r}
+##################################### Visualize the first two PCs
+library("factoextra")
+fviz_pca_var(pca,
+             col.var = "cos2",  # Use cos2 as proxy for correlation
+             gradient.cols = c("white", "red"),
+             repel = TRUE) +
+  labs(title = "PCA Correlation Circle",
+       x = "PC1", y = "PC2", color = "Contribution") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+```
+
+So, we can observe that Poverty status, Education, Computer, Internet, and Seniors are the contributing variables to the index of capacity module in terms of the first two PCs.
+
+In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 13.4% of the variance. So, I would suggest using weighted average of the PCs, which explained around 80% of the variance of the data with weights being the proportion of variance explained. This approach is suggested as an alternative approach in the literature if the 1st PC cannot explain the data enough.
+
+Before constructing the index, let us first make sure the directionality of the variables is correct. Next, to construct the index, let us keep the PCs that explained around 80% of the variance of the data. After this, we weight the PCs according to proportion of variance they explained. Finally, we standardize the index.
+
+```{r}
+###### flip the signs
+
+## directionality
+directionality <- c(1, NA, -1, NA, NA, -1, 
+                    1, 1, 1, 1, 1, NA,
+                    1, 1, -1, -1, 1, -1,
+                    -1, 1, 1, 1, -1)
+## flip the sign
+p <- ncol(scaled_data)
+rot <- pca$rotation
+for (j in 1:p) {
+  if (is.na(directionality[j]) == TRUE) {
+    rot[j, which(rot[j, ] > 0)] <- rot[j, which(rot[j, ] > 0)]
+  } else if (directionality[j] == 1) {
+    rot[j, which(rot[j, ] < 0)] <- -rot[j, which(rot[j, ] < 0)]
+  } else if (directionality[j] == -1) {
+    rot[j, which(rot[j, ] > 0)] <- -rot[j, which(rot[j, ] > 0)]
+  } 
+}
+PCs <- scaled_data %*% rot
+
+## choose the PCs that have explained 80% of the variance
+pca_summary <- summary(pca)
+num.PCs <- min(which(pca_summary$importance[3, ] > 0.8))
+weights <- pca_summary$importance[2, 1:num.PCs]
+index <- rowSums(PCs[, 1:num.PCs] %*% diag(weights))
+
+## normalize the index
+index <- (index - min(index)) / (max(index) - min(index))
+```
+
+To make the results more interpretable, we can compute the contribution of the variables below. Note that Pregnancy, English proficiency, Unemployment, Active computing, Crowded housing, Plumbing, Home age, and Vehicle ownership are the variables with high contribution.
+
+```{r}
+# Compute squared loadings
+loadings <- pca$rotation
+squared_loadings <- loadings^2
+
+# Compute percentage contribution
+contrib <- sweep(squared_loadings, 2, 
+                 colSums(squared_loadings), FUN = "/")
+
+# View contribution
+cont <- round(apply(contrib[, 1:num.PCs], 1, sum), 2) * 100
+print(cont)
+cont[which(cont > 80)]
+```
+
+It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(index, col = 'white', border = 'magenta',
+     xlab = '',
+     main = 'Index for Capacity')
+boxplot(index, col = 'white', 
+        border = 'magenta', xlab = '',
+        main = 'Index for Capacity')
+```
+
+### 3. Visualization and Validation of the Index
+
+Next, we perform clustering to validate the index. PCA is a linear mapping of the data. However, clustering can reveal non-linear structures of the data. So, it can serve as a validation method to check if the non-linear structure really meets our real-life expectation.
+
+For simplicity, let us start with $K$-means clustering. First, we determine the number of clusters by assuming that the index follows a mixture of several normal distributions, each representing a distinct group. Under this assumption, model-based criteria such as the Bayesian Information Criterion (BIC) can be used to select the optimal number of clusters. This approach is preferred here because alternative model-free methods are computationally intensive and less feasible for large spatial datasets.
+
+```{r}
+mod <- Mclust(index)
+summary(mod)  # Includes BIC-based optimal number of clusters
+```
+
+According to the results above, we can choose $K = 8$. To interpret the clustering results, we visualize the spatial distribution of the clusters below. To aid comparison with the index, the clusters are ordered according to their mean index values. For reference, the numerical index is also plotted.
+
+```{r}
+# K-means with 8 clusters
+mod.kmeans <- kmeans(index, centers = 8)
+data$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+data$cluster <- cluster_map[as.character(data$cluster_raw)] 
+data$cluster <- as.factor(data$cluster)
+
+# plot
+data$cluster <- as.numeric(as.character(data$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "slateblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "rosybrown1",
+  "6" = "palevioletred1",
+  "7" = "indianred1",
+  "8" = "darkred"
+)
+
+ggplot(data) +
+  geom_sf(aes(fill = as.factor(cluster), color = as.factor(cluster)), size = 0.5) +
+  scale_fill_manual(values = custom_colors, name = "Cluster") +
+  scale_color_manual(values = custom_colors, name = "Cluster") +
+  theme_bw() +
+  labs(title = "Spatial distribution of K-means clusters") +
+  theme(panel.grid = element_blank())
+
+######## Numerical Index
+ggplot(data = data) + geom_sf(aes(color = index)) + 
+  theme_bw() + labs(title = 'Index for Capacity Module') + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+```
+
+According to the kick-off slides, the capacity index is designed to measure a region's ability to mobilize individual and collective resources in response to extreme climate events. In North Carolina, the state capital, Raleigh, and Mecklenburg County (Charlotte metro area) and the highest GDP in the state, are expected to have higher capacity than other regions. This intuition is supported by the maps, where both areas fall into clusters with high mean index values. This alignment serves as a useful cross-check, confirming that the index appropriately reflects regional capacity.
