@@ -5,7 +5,6 @@
 # ----------------------------------------
 
 library(sf)
-library(dplyr)
 library(VIM)
 library(ggplot2)
 
