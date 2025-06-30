@@ -1,5 +1,5 @@
 ---
-title: "Principal Component Analysis for Capacity Module"
+title: "Principal Component Analysis for Hazard Module"
 format: html
 toc: true
 editor: visual
@@ -7,7 +7,7 @@ code-fold: true
 self-contained: true
 ---
 
-## Principal Component Analysis for Capacity Module
+## Principal Component Analysis for Hazard Module
 
 ### 1. Load packages and data
 
@@ -29,41 +29,45 @@ library("cluster")
 library("mclust")
 
 # read data
-data <- st_read('nc_grid_capacity_transformed.gpkg')
+data <- st_read('nc_grid_hazard_transformed.gpkg')
+data_capacity <- st_read('nc_grid_capacity_transformed.gpkg')
+
+# add block information
+block <- data_capacity %>%
+  st_drop_geometry() %>% select(grid_id, block_group_name)
+data <- data %>% left_join(block, by = "grid_id")
 
 # total sample size
 (n <- nrow(data))
 
 # dimension
-(p <- ncol(data) - 4)
+(p <- ncol(data) - 3)
 
 # make sure variables are numeric
-for (j in 4:26) {
+for (j in 3:10) {
   data[[j]] <- as.numeric(data[[j]])
 }
 
+# avoid NA
+data <- na.omit(data)
 
 ### drop the location information for easier modeling
 data_no_loc <- st_drop_geometry(data)
-data_no_loc <- data_no_loc[, -(1:3)]
-
-### drop female
-data_no_loc <- data_no_loc[, -which(colnames(data_no_loc) == 'pct_women')]
+data_no_loc <- data_no_loc[, -c(1:2, 11)]
 
 ### Scale the data
 scaled_data <- scale(data_no_loc)
-colnames(scaled_data) <- c('Poverty status', 'Pregnancy', 'Health insurance',
-                           'Nativity', 'Geographical mobility', 'Government jobs',
-                           'Minority', 'English proficiency', 'Single-parent', 
-                           'Unemployment', 'Education', 'Seniors', 
-                           'Youth', 'Homeownership rate', 'Active commuting', 
-                           'Crowded housing', 'Plumbing', 'Home age', 'Vehicle ownership',
-                           'Internet', 'Computer', 'Housing units')
+colnames(scaled_data) <- c('Satelite-based inundation map', 
+                 'Superfund', 'CAFOs',
+                 'TRI water impact', 
+                 'TRI total impact', 'Onsite Wastewater Treatment Systems',
+                 'Agricultural Runoff', 
+                 'FEMA Floodplain')
 ```
 
 ### 2. PCA and Index Construction
 
-Next, we perform the PCA and check the proportion of variance explained by different PCs. As we can observe below, the first three PCs explained the majority of the variance of the data.
+Next, we perform the PCA and check the proportion of variance explained by different PCs. As we can observe below, the first five PCs explained the majority of the variance of the data.
 
 ```{r}
 ### principal component analysis (PCA)
@@ -93,7 +97,7 @@ $$
 \mathrm{Contribution}_{j} = \sum_{k=1}^m \mathrm{Contribution}_{jk}
 $$
 
-Note that this contribution is irrevant to the directionality of the variables. The following plot presents the correlation between a variable and the PCs, where
+The following plot presents the correlation between a variable and the PCs, where
 
 1.  the magnitude of contribution is presented in terms of red, where variables with redder color have more contribution.
 2.  if the arrows are closer to the PCs, it means the variables are more correlated with the PCs.
@@ -116,32 +120,13 @@ fviz_pca_var(pca,
   )
 ```
 
-So, we can observe that Poverty status, Education, Computer, Internet, and Seniors are the contributing variables to the index of capacity module in terms of the first two PCs.
+So, we can observe that TRI water impact, TRI total impact, CAFOs, and Onsite Wastewater Treatment Systems are the contributing variables to the index of hazard module in terms of the first two PCs.
 
-In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 13.4% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
-
-Before constructing the index, let us first make sure the directionality of the variables is correct. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted. Finally, we standardize the index.
+Next, we consider using weighted average of the PCs, where the weights can be determined based on expert opinions. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted. Finally, we standardize the index.
 
 ```{r}
-###### flip the signs
-
-## directionality
-directionality <- c(1, NA, -1, NA, NA, -1, 
-                    1, 1, 1, 1, 1, NA,
-                    1, 1, -1, -1, 1, -1,
-                    -1, 1, 1, 1, -1)
-## flip the sign
 p <- ncol(scaled_data)
 rot <- pca$rotation
-for (j in 1:p) {
-  if (is.na(directionality[j]) == TRUE) {
-    rot[j, which(rot[j, ] > 0)] <- rot[j, which(rot[j, ] > 0)]
-  } else if (directionality[j] == 1) {
-    rot[j, which(rot[j, ] < 0)] <- -rot[j, which(rot[j, ] < 0)]
-  } else if (directionality[j] == -1) {
-    rot[j, which(rot[j, ] > 0)] <- -rot[j, which(rot[j, ] > 0)]
-  } 
-}
 PCs <- scaled_data %*% rot
 
 ## interpretation of the first 5 PCs
@@ -169,26 +154,23 @@ w4[which(abs(w4) > 0.3)]
 ## geographical mobility, youth, active commuting, plumbing, vehicle ownership
 w5 <- round(rot[, 5], 2)
 w5[which(abs(w5) > 0.3)]
-```
 
-So, note that
 
-1.  Higher values of PC1 suggest socioeconomic disadvantage and digital divide.
-2.  Higher values of PC2 suggest regions with less digital access, native-born populations.
-3.  Higher values of PC3 suggest regions that are more suburban, growing, and residential.
-4.  Higher values of PC4 suggest regions with more single-parent families and newer housing with lower insurance coverage and fewer US citizens.
-5.  Higher values of PC5 suggest regions with more people moving in or out, younger residents, better plumbing access, but less active commuting.
-
-So, PC1, PC2, and PC4 should receive negative weight while PC3 and PC5 shall receive positive weights.
-
-```{r}
 ## normalize the index
-index <- -apply(PCs[, c(1, 2, 4)], 1, sum) + apply(PCs[, c(3, 5)], 1, sum)
+index <- apply(PCs[, 1:5], 1, mean)
 index <- (index - min(index)) / (max(index) - min(index))
 data$index <- index
 ```
 
-To make the results more interpretable, we can compute the contribution of the variables below. Note that Health insurance, Nativity, Government Jobs, Seniors, Youth, Homeownership rate, Active commuting, Internet, Computer, and Housing units are the variables with high contribution.
+In summary,
+
+1.  PC1 characterizes pollution intensity.
+2.  Higher values of PC2 capture locations subject to flood risk, where large animal farming (but less crop farming) exists and but there is a lack of wastewater systems.
+3.  Higher values of PC3 reflect if a place has agricultural activity but not subject to flood.
+4.  Higher values of PC4 reflect if a place has urban or industrial centers with centralized infrastructure, less flooding risk, but more point-source pollution.
+5.  Higher values of PC5 reflect if a place has more flood risk but less waste contamination.
+
+Let us tentatively use positive weights for those 5 PCs. To make the results more interpretable, we can compute the contribution of the variables below. Note that Superfund, CAFOs, and FEMA Floodplain are the variables with high contribution.
 
 ```{r}
 # Compute squared loadings
@@ -202,7 +184,7 @@ contrib <- sweep(squared_loadings, 2,
 # View contribution
 cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
 print(cont)
-cont[which(cont > 25)]
+cont[which(cont > 60)]
 ```
 
 It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
@@ -211,10 +193,10 @@ It may be helpful to check the distribution of the index. Its histogram and boxp
 par(mfrow = c(1, 2))
 hist(index, col = 'white', border = 'magenta',
      xlab = '',
-     main = 'Index for Capacity')
+     main = 'Index for Hazard Module')
 boxplot(index, col = 'white', 
         border = 'magenta', xlab = '',
-        main = 'Index for Capacity')
+        main = 'Index for Hazard Module')
 ```
 
 ### 3. Visualization and Validation of the Index
@@ -228,11 +210,11 @@ mod <- Mclust(index)
 summary(mod)  # Includes BIC-based optimal number of clusters
 ```
 
-According to the results above, we can choose $K = 9$. To interpret the clustering results, we visualize the spatial distribution of the clusters below. To aid comparison with the index, the clusters are ordered according to their mean index values. For reference, the numerical index is also plotted.
+According to the results above, we can choose $K = 6$. To interpret the clustering results, we visualize the spatial distribution of the clusters below, e.g., for Haywood County. To aid comparison with the index, the clusters are ordered according to their mean index values. For reference, the numerical index is also plotted.
 
 ```{r}
-# K-means with 9 clusters
-mod.kmeans <- kmeans(index, centers = 9)
+# K-means with 6 clusters
+mod.kmeans <- kmeans(index, centers = 6)
 data$cluster_raw <- mod.kmeans$cluster
 
 # Mean index
@@ -250,14 +232,11 @@ data$cluster <- as.numeric(as.character(data$cluster))
 ######## Validation plot
 custom_colors <- c(
   "1" = "slateblue",
-  "2" = "royalblue",
-  "3" = "deepskyblue",
-  "4" = "paleturquoise1",
-  "5" = "seagreen1",
-  "6" = "rosybrown1",
-  "7" = "palevioletred1",
-  "8" = "indianred1",
-  "9" = "darkred"
+  "2" = "deepskyblue",
+  "3" = "paleturquoise1",
+  "4" = "palevioletred1",
+  "5" = "indianred1",
+  "6" = "darkred"
 )
 
 library(leaflet)
@@ -277,6 +256,7 @@ pal_index <- colorNumeric(
   na.color = "grey"
 )
 
+# Interactive leaflet map
 ### subset
 data_haywood <- data_lonlat[which(grepl("Haywood County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
 
@@ -312,14 +292,15 @@ leaflet(data_haywood, options = leafletOptions(minZoom = 7)) %>%
   ) 
 ```
 
-According to the kick-off slides, the capacity index is designed to measure a region's ability to mobilize individual and collective resources in response to extreme climate events. In North Carolina, the state capital, Raleigh, and Mecklenburg County (Charlotte metro area, the highest GDP in the state), are expected to have higher capacity than other regions. The distribution of the index in Wake County is shown below.
+As an additional check, we may look at the distribution of the index and the clustering results for Guilford County, where Greensboro is known for a lot of TRI releases and industrial activity. Note that most of the regions round Greensboro are marked in red, which are consistent with our expectation.
 
 ```{r}
+# Interactive leaflet map
 ### subset
-data_wake <- data_lonlat[which(grepl("Wake County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+data_guilford <- data_lonlat[which(grepl("Guilford County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
 
 # Interactive leaflet map
-leaflet(data_wake, options = leafletOptions(minZoom = 7)) %>%
+leaflet(data_guilford, options = leafletOptions(minZoom = 7)) %>%
   addTiles() %>%
   
   # Cluster layer
@@ -350,14 +331,15 @@ leaflet(data_wake, options = leafletOptions(minZoom = 7)) %>%
   ) 
 ```
 
-The distribution of the index in Mecklenburg County is shown below.
+Alternatively, we may check Wayne county, which has been known for large-scale animal farming. Note that most of the regions are marked in red, which are consistent with our expectation.
 
 ```{r}
+# Interactive leaflet map
 ### subset
-data_mecklenburg <- data_lonlat[which(grepl("Mecklenburg County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+data_wayne <- data_lonlat[which(grepl("Wayne County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
 
 # Interactive leaflet map
-leaflet(data_mecklenburg, options = leafletOptions(minZoom = 7)) %>%
+leaflet(data_wayne, options = leafletOptions(minZoom = 7)) %>%
   addTiles() %>%
   
   # Cluster layer
@@ -387,5 +369,3 @@ leaflet(data_mecklenburg, options = leafletOptions(minZoom = 7)) %>%
     options = layersControlOptions(collapsed = FALSE)
   ) 
 ```
-
-This intuition is supported by the maps, where both areas fall into clusters with high mean index values. This alignment serves as a useful cross-check, confirming that the index appropriately reflects regional capacity.
