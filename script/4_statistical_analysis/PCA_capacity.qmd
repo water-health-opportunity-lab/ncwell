@@ -50,6 +50,7 @@ data_no_loc <- data_no_loc[, -(1:3)]
 ### drop female
 data_no_loc <- data_no_loc[, -which(colnames(data_no_loc) == 'pct_women')]
 
+
 ### Scale the data
 scaled_data <- scale(data_no_loc)
 colnames(scaled_data) <- c('Poverty status', 'Pregnancy', 'Health insurance',
@@ -118,9 +119,11 @@ fviz_pca_var(pca,
 
 So, we can observe that Poverty status, Education, Computer, Internet, and Seniors are the contributing variables to the index of capacity module in terms of the first two PCs.
 
+
 In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 13.4% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
 
 Before constructing the index, let us first make sure the directionality of the variables is correct. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted. Finally, we standardize the index.
+
 
 ```{r}
 ###### flip the signs
@@ -143,6 +146,7 @@ for (j in 1:p) {
   } 
 }
 PCs <- scaled_data %*% rot
+
 
 ## interpretation of the first 5 PCs
 # PC1
@@ -190,6 +194,7 @@ data$index <- index
 
 To make the results more interpretable, we can compute the contribution of the variables below. Note that Health insurance, Nativity, Government Jobs, Seniors, Youth, Homeownership rate, Active commuting, Internet, Computer, and Housing units are the variables with high contribution.
 
+
 ```{r}
 # Compute squared loadings
 loadings <- pca$rotation
@@ -203,6 +208,7 @@ contrib <- sweep(squared_loadings, 2,
 cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
 print(cont)
 cont[which(cont > 25)]
+
 ```
 
 It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
@@ -233,6 +239,7 @@ According to the results above, we can choose $K = 9$. To interpret the clusteri
 ```{r}
 # K-means with 9 clusters
 mod.kmeans <- kmeans(index, centers = 9)
+
 data$cluster_raw <- mod.kmeans$cluster
 
 # Mean index
@@ -389,3 +396,4 @@ leaflet(data_mecklenburg, options = leafletOptions(minZoom = 7)) %>%
 ```
 
 This intuition is supported by the maps, where both areas fall into clusters with high mean index values. This alignment serves as a useful cross-check, confirming that the index appropriately reflects regional capacity.
+
