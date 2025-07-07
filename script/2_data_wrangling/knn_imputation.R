@@ -5,6 +5,10 @@
 # ----------------------------------------
 
 library(sf)
+<<<<<<< HEAD
+=======
+library(dplyr)
+>>>>>>> df36910cc55719bbc7f40df8345f96dd7f1234fe
 library(VIM)
 library(ggplot2)
 
@@ -25,7 +29,11 @@ cols <- names(data)[4:28] # adjust for other modules
 # Impute data with K Nearest Neighbors algorithm
 imputed_data <- kNN(data,
                     variable=cols,
+<<<<<<< HEAD
                     k=5, # can be adjusted
+=======
+                    k=10, # can be adjusted
+>>>>>>> df36910cc55719bbc7f40df8345f96dd7f1234fe
                     dist_var=c("x_coord","y_coord"),
                     imp_var=FALSE)
 
