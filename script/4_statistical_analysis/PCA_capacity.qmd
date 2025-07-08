@@ -50,16 +50,15 @@ data_no_loc <- data_no_loc[, -(1:3)]
 ### drop female
 data_no_loc <- data_no_loc[, -which(colnames(data_no_loc) == 'pct_women')]
 
-
 ### Scale the data
 scaled_data <- scale(data_no_loc)
 colnames(scaled_data) <- c('Poverty status', 'Pregnancy', 'Health insurance',
-                           'Nativity', 'Geographical mobility', 'Government jobs',
-                           'Minority', 'English proficiency', 'Single-parent', 
+                           'Nativity', 'Lack of Geographical mobility', 'Government jobs',
+                           'Minority', 'Lack of English proficiency', 'Single-parent', 
                            'Unemployment', 'Education', 'Seniors', 
                            'Youth', 'Homeownership rate', 'Active commuting', 
-                           'Crowded housing', 'Plumbing', 'Home age', 'Vehicle ownership',
-                           'Internet', 'Computer', 'Housing units')
+                           'Crowded housing', 'Plumbing', 'Home age', 'No Vehicle ownership',
+                           'No Internet', 'No Computer', 'Housing units')
 ```
 
 ### 2. PCA and Index Construction
@@ -82,6 +81,73 @@ fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
   )
 ```
 
+In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 14% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
+
+Before constructing the index, let us first make sure the directionality of the variables is correct. To make the PCs more interpretable, we apply the varimax rotation to the loadings, which maximizes the variance of the loadings within each factor. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted.
+
+```{r}
+###### flip the signs
+
+## directionality
+directionality <- c(-1, NA, 1, NA, NA, 1, 
+                    -1, -1, -1, -1, -1, 
+                    -1, -1, 1, 1, -1, 1,
+                    1, -1, -1, -1, 1)
+## flip the sign
+p <- ncol(scaled_data)
+## varimax rotation
+rot <- varimax(pca$rotation)$rotmat
+rownames(rot) <- colnames(scaled_data)
+for (j in 1:p) {
+  if (is.na(directionality[j]) == TRUE) {
+    rot[j, which(rot[j, ] > 0)] <- rot[j, which(rot[j, ] > 0)]
+  } else if (directionality[j] == 1) {
+    rot[j, which(rot[j, ] < 0)] <- -rot[j, which(rot[j, ] < 0)]
+  } else if (directionality[j] == -1) {
+    rot[j, which(rot[j, ] > 0)] <- -rot[j, which(rot[j, ] > 0)]
+  } 
+}
+PCs <- scaled_data %*% rot
+
+## interpretation of the first 5 PCs
+# PC1 (increase the capacity) (urban, dense, well-developed)
+## poverty (-), pregnancy (-), housing units (+)
+w1 <- round(rot[, 1], 2)
+w1[which(abs(w1) > 0.3)]
+
+# PC2 (increase the capacity) (young, has internet, educated, not poor)
+## poverty (-), education (-), seniors (-), internet (-)
+w2 <- round(rot[, 2], 2)
+w2[which(abs(w2) > 0.3)]
+
+# PC3 (positive effects on capacity) 
+## (bike friently, access to computer, young, health insured)
+## health insurance (+), seniors (-), active commuting (+), computer (-)
+w3 <- round(rot[, 3], 2)
+w3[which(abs(w3) > 0.3)]
+
+# PC4 (positive effects on capacity) 
+## (not poor, US citizens, adult, with cars, access to internet)
+## poverty (-), nativity (+), youth (-), vehicle ownership (-), internet (-)
+w4 <- round(rot[, 4], 2)
+w4[which(abs(w4) > 0.3)]
+
+# PC5 (positive effects on capacity) 
+## stable resident, english profient, family, more young
+## geographical mobility (+), minority (-), 
+## single parent (-), seniors (-)
+w5 <- round(rot[, 5], 2)
+w5[which(abs(w5) > 0.3)]
+```
+
+We can interpret those PCs in the following way. If a region has higher values of
+
+1.  PC1, it is more urban, dense, well-developed.
+2.  PC2, it has more economic and digital resources, higher education levels, and younger population.
+3.  PC3, it has more access to health services, younger and more mobile population, and greater digital inclusion.
+4.  PC4, it has more native population, more adults, digitally connected, mobile population (with cars).
+5.  PC5, it has more stable, English proficient, and younger residents, more of which are families.
+
 To interpret this PC, let us visualize the content of the first two PCs in terms of their contribution. For variable $j$ and PC $k$, the contribution of variable $j$ is defined as
 
 $$
@@ -102,102 +168,67 @@ Note that this contribution is irrevant to the directionality of the variables. 
 
 ```{r}
 ##################################### Visualize the first two PCs
-library("factoextra")
-fviz_pca_var(pca,
-             col.var = "cos2",  # Use cos2 as proxy for correlation
-             gradient.cols = c("white", "red"),
-             repel = TRUE) +
-  labs(title = "PCA Correlation Circle",
-       x = "PC1", y = "PC2", color = "Contribution") +
+library(ggplot2)
+library(grid)  # for unit()
+
+# Assume rotated_loadings is a matrix from varimax()
+df <- as.data.frame(rot[, 1:2])
+colnames(df) <- c("PC1", "PC2")
+df$varnames <- rownames(df)
+
+# Compute contribution (squared length of vector)
+df$contrib <- df$PC1 ^ 2 / sum(df$PC1 ^ 2) + df$PC2 ^ 2 / sum(df$PC2 ^ 2)
+
+# Normalize contribution for scaling (optional)
+df$scale <- sqrt(df$contrib / max(df$contrib))  # scale factor for arrow length
+
+# Apply scaling to PC1 and PC2 for proportional arrow length
+df$PC1_scaled <- df$PC1 * df$scale
+df$PC2_scaled <- df$PC2 * df$scale
+
+# Create unit circle
+theta <- seq(0, 2 * pi, length.out = 100)
+circle <- data.frame(x = cos(theta), y = sin(theta))
+
+# Plot
+ggplot(df, aes(x = 0, y = 0)) +
+  geom_path(data = circle, aes(x = x, y = y), inherit.aes = FALSE, color = "gray") +
+  geom_segment(aes(xend = PC1_scaled, yend = PC2_scaled, color = contrib),
+               arrow = arrow(length = unit(0.2, "cm")),
+               size = 2) +
+  geom_text(aes(x = PC1_scaled, y = PC2_scaled, label = varnames, color = contrib),
+            hjust = 0.5, vjust = -0.8, size = 4, fontface = "bold") +
+  scale_color_gradient(low = "white", high = "red") +
+  coord_fixed() +
   theme_minimal() +
-  theme(
-    plot.title = element_text(hjust = 0.5),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank()
-  )
+  labs(title = "PCA Correlation Circle (Varimax Rotated)",
+       x = "Rotated PC1", y = "Rotated PC2", color = "Contribution")
 ```
 
-So, we can observe that Poverty status, Education, Computer, Internet, and Seniors are the contributing variables to the index of capacity module in terms of the first two PCs.
-
-
-In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 13.4% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
-
-Before constructing the index, let us first make sure the directionality of the variables is correct. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted. Finally, we standardize the index.
-
+So, we can observe that Housing units, Seniors, Poverty status, and No internet are the contributing variables to the index of capacity module in terms of the first two PCs. Next, we visualize the raw distribution of the index, which turns out to be highly left-skewed. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
 
 ```{r}
-###### flip the signs
+## raw distribution of the index
+index <- apply(PCs, 1, mean)
+hist(index, main = 'Raw Capacity Index', col = 'white',
+     border = 'magenta')
 
-## directionality
-directionality <- c(1, NA, -1, NA, NA, -1, 
-                    1, 1, 1, 1, 1, NA,
-                    1, 1, -1, -1, 1, -1,
-                    -1, 1, 1, 1, -1)
-## flip the sign
-p <- ncol(scaled_data)
-rot <- pca$rotation
-for (j in 1:p) {
-  if (is.na(directionality[j]) == TRUE) {
-    rot[j, which(rot[j, ] > 0)] <- rot[j, which(rot[j, ] > 0)]
-  } else if (directionality[j] == 1) {
-    rot[j, which(rot[j, ] < 0)] <- -rot[j, which(rot[j, ] < 0)]
-  } else if (directionality[j] == -1) {
-    rot[j, which(rot[j, ] > 0)] <- -rot[j, which(rot[j, ] > 0)]
-  } 
-}
-PCs <- scaled_data %*% rot
+## transformation
+lmod <- lm(index - min(index) + 1e-4 ~ 1)
+bc <- boxcox(lmod)
+(lambda <- bc$x[which.max(bc$y)])
 
-
-## interpretation of the first 5 PCs
-# PC1
-## poverty, minority, education, internet, computer
-w1 <- round(rot[, 1], 2)
-w1[which(abs(w1) > 0.3)]
-
-# PC2
-## nativity, seniors, internet, computer
-w2 <- round(rot[, 2], 2)
-w2[which(abs(w2) > 0.3)]
-
-# PC3
-## government jobs, seniors, homeownership, housing units
-w3 <- round(rot[, 3], 2)
-w3[which(abs(w3) > 0.3)]
-
-# PC4
-## health insurance, nativity, single-parent, home age
-w4 <- round(rot[, 4], 2)
-w4[which(abs(w4) > 0.3)]
-
-# PC5
-## geographical mobility, youth, active commuting, plumbing, vehicle ownership
-w5 <- round(rot[, 5], 2)
-w5[which(abs(w5) > 0.3)]
-```
-
-So, note that
-
-1.  Higher values of PC1 suggest socioeconomic disadvantage and digital divide.
-2.  Higher values of PC2 suggest regions with less digital access, native-born populations.
-3.  Higher values of PC3 suggest regions that are more suburban, growing, and residential.
-4.  Higher values of PC4 suggest regions with more single-parent families and newer housing with lower insurance coverage and fewer US citizens.
-5.  Higher values of PC5 suggest regions with more people moving in or out, younger residents, better plumbing access, but less active commuting.
-
-So, PC1, PC2, and PC4 should receive negative weight while PC3 and PC5 shall receive positive weights.
-
-```{r}
-## normalize the index
-index <- -apply(PCs[, c(1, 2, 4)], 1, sum) + apply(PCs[, c(3, 5)], 1, sum)
+## standardization
 index <- (index - min(index)) / (max(index) - min(index))
+index <- index ^ (as.numeric(lambda))
 data$index <- index
 ```
 
-To make the results more interpretable, we can compute the contribution of the variables below. Note that Health insurance, Nativity, Government Jobs, Seniors, Youth, Homeownership rate, Active commuting, Internet, Computer, and Housing units are the variables with high contribution.
-
+To make the results more interpretable, we can compute the contribution of the variables below. Note that Poverty status, Lack of Geographical mobility, Minority, Seniors, No Internet, No Computer, and Housing units are the variables with high contribution.
 
 ```{r}
 # Compute squared loadings
-loadings <- pca$rotation
+loadings <- rot
 squared_loadings <- loadings^2
 
 # Compute percentage contribution
@@ -208,7 +239,6 @@ contrib <- sweep(squared_loadings, 2,
 cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
 print(cont)
 cont[which(cont > 25)]
-
 ```
 
 It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
@@ -234,12 +264,11 @@ mod <- Mclust(index)
 summary(mod)  # Includes BIC-based optimal number of clusters
 ```
 
-According to the results above, we can choose $K = 9$. To interpret the clustering results, we visualize the spatial distribution of the clusters below. To aid comparison with the index, the clusters are ordered according to their mean index values. For reference, the numerical index is also plotted.
+According to the results above, we can choose $K = 8$. To interpret the clustering results, we visualize the spatial distribution of the clusters below in some western counties in NC state, e.g., Henderson County, Buncombe County, and Watauga County. To aid comparison with the index, the clusters are ordered according to their mean index values. For reference, the numerical index is also plotted.
 
 ```{r}
-# K-means with 9 clusters
-mod.kmeans <- kmeans(index, centers = 9)
-
+# K-means with 8 clusters
+mod.kmeans <- kmeans(index, centers = 8)
 data$cluster_raw <- mod.kmeans$cluster
 
 # Mean index
@@ -260,11 +289,10 @@ custom_colors <- c(
   "2" = "royalblue",
   "3" = "deepskyblue",
   "4" = "paleturquoise1",
-  "5" = "seagreen1",
-  "6" = "rosybrown1",
-  "7" = "palevioletred1",
-  "8" = "indianred1",
-  "9" = "darkred"
+  "5" = "rosybrown1",
+  "6" = "palevioletred1",
+  "7" = "indianred1",
+  "8" = "darkred"
 )
 
 library(leaflet)
@@ -284,11 +312,12 @@ pal_index <- colorNumeric(
   na.color = "grey"
 )
 
+# Interactive leaflet map
 ### subset
-data_haywood <- data_lonlat[which(grepl("Haywood County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+data_henderson <- data_lonlat[which(grepl("Henderson County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
 
 # Interactive leaflet map
-leaflet(data_haywood, options = leafletOptions(minZoom = 7)) %>%
+leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
   addTiles() %>%
   
   # Cluster layer
@@ -316,7 +345,100 @@ leaflet(data_haywood, options = leafletOptions(minZoom = 7)) %>%
   addLayersControl(
     overlayGroups = c("Cluster", "Index"),
     options = layersControlOptions(collapsed = FALSE)
-  ) 
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Henderson County</strong>",
+    position = "bottomleft"
+  )
+```
+
+Next, we take a look at the distribution of the clusters and index for the Buncombe County.
+
+```{r}
+# Interactive leaflet map
+### subset
+data_buncombe <- data_lonlat[which(grepl("Buncombe County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index),
+    color = ~pal_index(index),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Buncombe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+Then, we look at the distribution of the clusters and index for the Watauga County.
+
+```{r}
+# Interactive leaflet map
+### subset
+data_watauga <- data_lonlat[which(grepl("Watauga County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index),
+    color = ~pal_index(index),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Watauga County</strong>",
+    position = "bottomleft"
+  )
 ```
 
 According to the kick-off slides, the capacity index is designed to measure a region's ability to mobilize individual and collective resources in response to extreme climate events. In North Carolina, the state capital, Raleigh, and Mecklenburg County (Charlotte metro area, the highest GDP in the state), are expected to have higher capacity than other regions. The distribution of the index in Wake County is shown below.
@@ -396,4 +518,3 @@ leaflet(data_mecklenburg, options = leafletOptions(minZoom = 7)) %>%
 ```
 
 This intuition is supported by the maps, where both areas fall into clusters with high mean index values. This alignment serves as a useful cross-check, confirming that the index appropriately reflects regional capacity.
-
