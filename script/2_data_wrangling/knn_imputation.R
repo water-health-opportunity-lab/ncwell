@@ -6,9 +6,12 @@
 
 library(sf)
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 library(dplyr)
 >>>>>>> df36910cc55719bbc7f40df8345f96dd7f1234fe
+=======
+>>>>>>> 9b3a26920a542d03fceb024f21e90d8d4404295c
 library(VIM)
 library(ggplot2)
 
