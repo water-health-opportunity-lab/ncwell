@@ -373,7 +373,7 @@ leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
   )
 ```
 
-Then, we look at the distribution of the clusters and index for the Buncombe County.
+Then, we look at the distribution of the clusters and index for the Watauga County.
 
 ```{r}
 # Interactive leaflet map
