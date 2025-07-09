@@ -1,5 +1,5 @@
 # ----------------------------------------
-# R Script to fill in missing data with K Nearest Neighbors imputation
+# R Script to fill in missing data with K Nearest Neighbors imputation for Capacity Module
 # Author: Jennifer Zhang
 # Last edited: 2025-06-25
 # ----------------------------------------
@@ -10,7 +10,7 @@ library(VIM)
 library(ggplot2)
 
 # Read in data from module
-data <- st_read('data/output/nc_grid_capacity.gpkg')
+data <- st_read('data/output/nc_grid_capacity_transformed_no_impute.gpkg')
 
 # Put centroids in a second geometry column
 data$centroids <- st_centroid(data$geom)
@@ -21,12 +21,12 @@ data$x_coord <- coords[, 1]
 data$y_coord <- coords[, 2]
 
 # List of variable columns to impute
-cols <- names(data)[4:28] # adjust for other modules
+cols <- names(data)[4:24] # adjust for other modules
 
 # Impute data with K Nearest Neighbors algorithm
 imputed_data <- kNN(data,
                     variable=cols,
-                    k=10, # can be adjusted
+                    k=5, # can be adjusted
                     dist_var=c("x_coord","y_coord"),
                     imp_var=FALSE)
 
