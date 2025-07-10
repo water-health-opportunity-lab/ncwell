@@ -6,7 +6,7 @@
 
 library(sf)
 library(dplyr)
-library(VIM)
+library(FNN)
 library(ggplot2)
 
 # Read in data from module
@@ -16,21 +16,32 @@ data <- st_read('data/output/nc_grid_capacity_transformed_no_impute.gpkg')
 data$centroids <- st_centroid(data$geom)
 coords <- st_coordinates(data$centroids)
 
-# Add coordinates
-data$x_coord <- coords[, 1]
-data$y_coord <- coords[, 2]
-
 # List of variable columns to impute
-cols <- names(data)[4:24] # adjust for other modules
+cols <- names(data)[4:27]
 
 # Impute data with K Nearest Neighbors algorithm
-imputed_data <- kNN(data,
-                    variable=cols,
-                    k=5, # can be adjusted
-                    dist_var=c("x_coord","y_coord"),
-                    imp_var=FALSE)
+# ----------------------------------------
+data <- data %>% mutate(row_id = row_number())  # preserve row order
 
-data[cols] <- imputed_data[cols]
+k_choice = 5
+
+for (var in cols){
+  na_rows <- which(is.na(data[[var]]))
+  complete_rows <- which(!is.na(data[[var]]))
+  
+  nn <- get.knnx(data = coords[complete_rows, ], query = coords[na_rows, ], k = k_choice)
+  neighbors <- nn$nn.index
+  
+  for (j in seq_along(na_rows)){
+    i <- na_rows[j]
+    neighbor_idx <- complete_rows[neighbors[j, ]]
+    selected_vals <- data[[var]][neighbor_idx]
+    
+    data[[var]][i] <- mean(selected_vals, na.rm = TRUE)
+  }
+}
+
+data <- data %>% select(-row_id)
 
 # Check results
 # plot(data['pct_poverty'], border=NA)
