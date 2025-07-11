@@ -10,7 +10,7 @@
 #     - pct_gov_workers
 #
 # Author: Xindi Hu
-# Last edited: 2025-04-29
+# Last edited: 2025-05-03
 # ----------------------------------------
 
 # read in helper function
@@ -58,21 +58,52 @@ sf_acs_tract_reprojected <- st_transform(sf_acs_tract, st_crs(nc_grid))
 
 ## 4. Spatial join: assign polygon attribute(s) to each centroid
 # This gives each centroid the value of the polygon it falls in
-nc_centroids_joined <- st_join(nc_centroids, sf_acs_tract_reprojected) %>%
+nc_centroids_joined_tract <- st_join(nc_centroids, sf_acs_tract_reprojected) %>%
   st_drop_geometry() %>%
-  dplyr::select(grid_id, census_tract_name = name, starts_with('pct_'))
+  dplyr::select(grid_id, tract_name = name, starts_with('pct_'))
 
 # 5. Merge the joined values back into the original grid
 nc_grid <- nc_grid %>%
-  left_join(nc_centroids_joined, by = "grid_id")
-
-# check the result
-summary(nc_grid$pct_poverty)
-plot(nc_grid['pct_poverty'], border = NA)
+  left_join(nc_centroids_joined_tract, by = "grid_id")
 
 # EXTRACT BLOCK GROUP ACS VARIABLES
+## 2. read in acs tabular data
+df_acs_block_group <- read_csv("data/input/ACS/acs_block_group.csv") %>%
+  janitor::clean_names() %>%
+  mutate(geoid = as.character(geoid))
 
-# Jennifer TO-DO
+# add the geometry column to the data frame
+nc_block_group <- get_acs(
+  geography = "block group",
+  state = "NC",
+  year = 2023,
+  survey = "acs5",
+  variables = "B02001_001",
+  geometry = TRUE) %>%
+  dplyr::select(geoid = GEOID, geometry)
+
+# join tabular ACS data to geometry
+sf_acs_block_group <- nc_block_group %>%
+  left_join(df_acs_block_group, by = "geoid")
+
+## 3. align CRS
+sf_acs_block_group_reprojected <- st_transform(sf_acs_block_group, st_crs(nc_grid))
+
+## 4. Spatial join: assign polygon attribute(s) to each centroid
+# This gives each centroid the value of the polygon it falls in
+nc_centroids_joined_block_group <- st_join(nc_centroids, sf_acs_block_group_reprojected) %>%
+  st_drop_geometry() %>%
+  dplyr::select(grid_id, block_group_name = name, starts_with(c('pct_','pop_','housing_','households_')))
+
+# 5. Merge the joined values back into the original grid
+nc_grid <- nc_grid %>%
+  left_join(nc_centroids_joined_block_group, by = "grid_id") %>%
+  relocate("block_group_name", .after = "grid_id") %>%
+  select(-"tract_name")
+
+# check the result
+# summary(nc_grid$pop_density)
+# plot(nc_grid['pop_density'], border = NA)
 
 #WRITE OUT RESULTS 
 st_write(nc_grid, "data/output/nc_grid_capacity.gpkg", layer = "capacity", delete_layer = TRUE)

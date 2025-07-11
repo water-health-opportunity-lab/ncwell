@@ -1,0 +1,465 @@
+---
+title: "Exploratory Data Analysis (Hazard Module)"
+format: html
+toc: true
+editor: visual
+code-fold: true
+self-contained: true
+---
+
+## 1. Highlight and a Summary
+
+The below is a highlight for this exploratory data analysis of hazard module.
+
+1.  We observe some outliers in the variables. For most of the variables, log transformation (or log10) or square root transformation works well. However, for Agricultural runoff, both top coding and bottom coding are used to resolve this issue. For Satellite-based inundation map, top coding is applied.
+2.  We observe some spatial patterns of the variables in this dataset.
+3.  We do not observe any multicollinearity in this dataset.
+
+The sample size of this dataset is 129169 and it has 8 variables.
+
+```{r}
+# load packages
+require('sf')
+require('ggplot2')
+
+# read data
+data <- st_read('nc_grid_hazard.gpkg')
+
+# total sample size
+(n <- nrow(data))
+
+# dimension
+(p <- ncol(data) - 3)
+
+# colnames
+colnames(data)
+```
+
+Next, we look into the variables in different groups.
+
+## 2. Analysis for different variables
+
+Next, we present the exploratory data analysis for different variables. We check missing percentage, mean, standard deviation (SD), median, and interquantile range (IQR) of the variables. Moreover, the histograms and boxplots of the variables are also presented. The proportions of outliers are also provided.
+
+### **2.1 Satellite-based inundation map and superfund**
+
+First, the descriptive statistics of satellite-based inundation map and superfund are presented below. From the results below, **the distribution of superfund is zero-inflated**.
+
+```{r}
+# check interquantile range
+iqr <- function(x) paste0(round(quantile(na.omit(x), .25), 2), '-', 
+                          round(quantile(na.omit(x), .75), 2))
+
+# function for summary statistics
+summ <- function(x, names) {
+  p <- ncol(x)
+  n <- nrow(x)
+  tab <- data.frame()
+  for (j in 1:p) {
+    x.j <- x[, j]
+    info <- c(round(length(which(is.na(x.j) == TRUE)) / n * 100, 2),
+              class(x.j),
+              round(mean(x.j, na.rm = TRUE), 2),
+              round(sd(x.j, na.rm = TRUE), 2),
+              round(median(x.j, na.rm = TRUE), 2),
+              iqr(x.j))
+    tab <- rbind(tab, info)
+  }
+  tab <- cbind(names, tab)
+  colnames(tab) <- c('Name', 'Missing Percentage', 'Class', 'Mean', 
+                     'SD', 'Median', 'IQR')
+  print(tab)
+}
+
+# summary
+names1 <- c('Satellite-based inundation map', 'Superfund')
+x.1 <- cbind(data$inundation_max, data$sems_impact)
+summ(x = x.1, names = names1)
+```
+
+We check the distribution of missing values below, which are in grey.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = inundation_max)) + 
+  theme_bw() + labs(title = "Satellite-based inundation map") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+```
+
+The histograms of those two variables are presented below. Both of them are right-skewed but superfund is zero-inflated.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(data$inundation_max, col = 'white', border = 'magenta',
+     xlab = '',
+     main = 'Satellite-based inundation map')
+hist(data$sems_impact, col = 'white', border = 'deepskyblue',
+     xlab = '',
+     main = 'Superfund')
+```
+
+The boxplots of those two variables are presented below. As we can see, both of them have many outliers.
+
+```{r}
+par(mfrow = c(1, 2))
+boxplot(data$inundation_max, col = 'white', border = 'magenta',
+        xlab = 'Satellite-based inundation map')
+boxplot(data$sems_impact, 
+        xlab = 'Superfund',
+        col = 'white', border = 'deepskyblue')
+```
+
+In specific, the percentage of outliers on the right-tail is shown below. They are defined as the observations that have distances greater than 1.5 times IQR from the 75% quantile. Indeed, around 9% of the satellite-based inundation map are outliers.
+
+```{r}
+# find the percentage of outliers on the right tail
+right.whisker <- function(x) {
+  n <- length(x)
+  qf <- quantile(x, c(.25, .75), na.rm = TRUE)
+  IQR <- qf[2] - qf[1]
+  length(which(x > qf[2] + 1.5 * IQR)) / n
+}
+
+# percentage of outliers on the right tail
+outlier.percent <- c(right.whisker(data$inundation_max),
+                     right.whisker(data$sems_impact)) * 100 
+names(outlier.percent) <- names1
+print(round(outlier.percent, 2))
+```
+
+Next, we check if square root transformation or log transformation helps. The idea is to cover a desired proportion of data (say, 98%) of normally behaved data under some transformation. As we can see below, square root transformation helps.
+
+```{r}
+oc.check <- function(x, level = .99, method = 'power', degree) {
+  x[which(x == Inf)] <- NA
+  x <- na.omit(x)
+  cv <- qnorm(level)
+  if (method == 'log') {
+    x <- log(na.omit(x) + 1e-4)
+  } else if (method == 'sqrt') {
+    x <- sqrt(x)
+  } else if (method == 'boxcox') {
+    fit <- lm(x ~ 1)
+    bc <- boxcox(fit, lambda = seq(2, 10, 0.1))
+    best_lambda <- bc$x[which.max(bc$y)]
+    x <- (x ^ best_lambda - 1) / best_lambda
+  } else if (method == 'power') {
+    x <- x ^ (degree)
+  } else if (method == 'log10') {
+    x <- log10(x + 1e-4)
+  }
+  n <- length(x)
+  length(which(x > mean(x) + cv * sd(x) | x < mean(x) - cv * sd(x))) / n
+}
+oc.check(data$inundation_max, method = 'sqrt')
+oc.check(data$sems_impact, method = 'sqrt')
+```
+
+Next, we observe there are still some outliers for Satellite-based inundation map after log transformation. Since it is right-skewed, we apply top coding to it and plot its histogram below.
+
+```{r}
+coding <- function(x, alpha = 0.02, 
+                     tail = c('left', 'right', 'both')) {
+  lt <- quantile(x, alpha, na.rm = TRUE)
+  rt <- quantile(x, 1 - alpha, na.rm = TRUE)
+  
+  if (tail == 'left') {
+    x[which(x < lt)] <- lt
+  } else if (tail == 'right') {
+    x[which(x > rt)] <- rt
+  } else {
+    x[which(x < lt)] <- lt
+    x[which(x > rt)] <- rt
+  }
+  
+  return(x)
+}
+
+x1.1.trans <- coding(sqrt(data$inundation_max), tail = 'right')
+oc.check(x1.1.trans, method = 'power', degree = 1) * 100
+hist(x1.1.trans, col = 'white', border = 'magenta',
+     main = 'Satellite-based inundation map', xlab = '')
+
+x1.trans <- cbind(x1.1.trans,
+                  sqrt(data$sems_impact))
+
+data$inundation_max <- x1.1.trans
+data$sems_impact <- sqrt(data$sems_impact)
+```
+
+Next, we take a look at the spatial distribution of those two variables. For superfund, most of the regions have zero values with a few spots being greater than zero.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = log(inundation_max + 1e-4))) + 
+  theme_bw() + labs(title = "Satellite-based inundation map") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+ggplot(data = data) + geom_sf(aes(color = sqrt(sems_impact))) + 
+  theme_bw() + labs(title = "Superfund") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+```
+
+```         
+```
+
+### **2.2 CAFOs, TRI water impact, and TRI total impact**
+
+The summary statistics of CAFOs, TRI water impact, and TRI total impact are presented below. None of those variables are missing. However, notice that the scales of TRI water impact and TRI total impact are very large.
+
+```{r}
+# summary
+names2 <- c('CAFOs', 'TRI water impact', 'TRI total impact')
+x.2 <- cbind(data$cafo_impact, data$tri_water_releases, data$tri_total_releases)
+summ(x = x.2, names = names2)
+```
+
+Next, we check the histograms of those three variables. As we can see, all those values are right-skewed and zero-inflated.
+
+```{r}
+par(mfrow = c(1, 3))
+hist(data$cafo_impact, col = 'white', border = 'magenta',
+     xlab = '',
+     main = names2[1])
+hist(data$tri_water_releases, col = 'white', border = 'deepskyblue',
+     xlab = '',
+     main = names2[2])
+hist(data$tri_total_releases, col = 'white', border = 'indianred1',
+     xlab = '',
+     main = names2[3])
+```
+
+Next, let us look at the right-tail for TRI water impact and TRI total impact in more detail. As, we can see, they are highly zero-inflated. And for TRI total impact, its scale is large.
+
+```{r}
+round(quantile(data$tri_water_releases, c(.8, .85, .9, .95, .975)), 2)
+round(quantile(data$tri_total_releases, c(.8, .85, .9, .95, .975)), 2)
+```
+
+The boxplots of those three variables are presented below.
+
+```{r}
+par(mfrow = c(1, 3))
+boxplot(data$cafo_impact, col = 'white', border = 'magenta',
+        xlab = names2[1])
+boxplot(data$tri_water_releases, 
+        xlab = names2[2],
+        col = 'white', border = 'deepskyblue')
+boxplot(data$tri_total_releases, 
+        xlab = names2[3],
+        col = 'white', border = 'indianred1')
+```
+
+Next, we find the percentage of outliers on the right-tail. As we can see, **all of them have many outliers**.
+
+```{r}
+# find the percentage of outliers on the right tail
+right.whisker <- function(x) {
+  n <- length(x)
+  qf <- quantile(x, c(.25, .75), na.rm = TRUE)
+  IQR <- qf[2] - qf[1]
+  length(which(x > qf[2] + 1.5 * IQR)) / n
+}
+
+# percentage of outliers on the right tail
+outlier.percent <- c(right.whisker(data$cafo_impact),
+                     right.whisker(data$tri_water_releases),
+                     right.whisker(data$tri_total_releases)) * 100 
+names(outlier.percent) <- names2
+print(round(outlier.percent, 2))
+```
+
+Next, we check whether we can do some transformation to resolve this issue, which considers square root transformation. According to the results below, we see that **square root transformation works for TRI water impact and TRI total impact but not for CAFOs**. For this reason, we also try a log10 transformation for CAFOs, which turn out to work. But log10 transformation does not work for TRI water impact and TRI total impact.
+
+```{r}
+# CAFOs
+oc.check(data$cafo_impact, method = 'sqrt')
+# TRI water impact
+oc.check(data$tri_water_releases, method = 'sqrt')
+# TRI total impact 
+oc.check(data$tri_total_releases, method = 'sqrt')
+
+# CAFOs
+oc.check(data$cafo_impact, method = 'log10')
+# TRI water impact
+oc.check(data$tri_water_releases, method = 'log10')
+# TRI total impact 
+oc.check(data$tri_total_releases, method = 'log10')
+
+x2.trans <- cbind(log10(data$cafo_impact + 1e-4),
+                  sqrt(data$tri_water_releases),
+                  sqrt(data$tri_total_releases))
+data$cafo_impact <- log10(data$cafo_impact + 1e-4)
+data$tri_water_releases <- sqrt(data$tri_water_releases)
+data$tri_total_releases <- sqrt(data$tri_total_releases)
+```
+
+Next, we take a look at the spatial distribution of those three variables. For TRI total impact and TRI water impact, most of the regions are flat around zero but with a few spots greater than zero. For CAFOs, we see the high values are mostly around the southeastern regions.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = log10(cafo_impact + 1e-4))) + 
+  theme_bw() + labs(title = "CAFOs (Log 10)") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+ggplot(data = data) + geom_sf(aes(color = sqrt(tri_water_releases))) + 
+  theme_bw() + labs(title = "TRI water impact (Square root)") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+ggplot(data = data) + geom_sf(aes(color = sqrt(tri_total_releases))) + 
+  theme_bw() + labs(title = "TRI total impact (Square root)") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+```
+
+### **2.3 Onsite Wastewater Treatment Systems, Agricultural Runoff, and FEMA Floodplain**
+
+The summary statistics of onsite wastewater treatment systems (OWTS), agricultural runoff, and FEMA floodplain are presented below. Here, we do not observe any missing values here. Note that FEMA Floodplain is logical (either FALSE or TRUE). We may transform it into 0 and 1.
+
+```{r}
+names3 <- c('Onsite Wastewater Treatment Systems', 
+            'Agricultural Runoff', 'FEMA Floodplain')
+x.3 <- data.frame(data$owts, data$ag_runoff, data$fema_floodplain)
+summ(x = x.3, names = names3)
+x.3 <- data.frame(data$owts, data$ag_runoff, 
+                  ifelse(data$fema_floodplain, 1, 0))
+summ(x = x.3, names = names3)
+```
+
+Next, we check the histogram of OWTS and agricultural runoff, and the distribution of FEMA Floodplain below.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(data$owts, col = 'white', border = 'magenta',
+     xlab = '',
+     main = names3[1])
+hist(data$ag_runoff, col = 'white', border = 'deepskyblue',
+     xlab = '',
+     main = names3[2])
+table(x.3[, 3])
+```
+
+We can observe that
+
+1.  The distribution of OWTS is very right-skewed.
+2.  The distributions of agicultural runoff is also right-skewed.
+3.  For FEMA Floodplain, most of the regions have zero values.
+
+Next, we check the boxplots of those variables. According to the boxplots, we see (1) there are outliers on right-tail of OWTS, and (2) many outliers on the left and right tails of agricultural cutoff.
+
+```{r}
+par(mfrow = c(1, 2))
+boxplot(data$owts, col = 'white', border = 'magenta',
+        xlab = names3[1])
+boxplot(data$ag_runoff, 
+        xlab = names3[2],
+        col = 'white', border = 'deepskyblue')
+```
+
+Last, we check the proportion of outliers as below. As we can observe below, there are many outliers for OWTS and agricultural runoff.
+
+```{r}
+whisker <- function(x) {
+  n <- length(x)
+  qf <- quantile(x, c(.25, .75), na.rm = TRUE)
+  IQR <- qf[2] - qf[1]
+  length(which(x > qf[2] + 1.5 * IQR | x < qf[1] - 1.5 * IQR)) / n
+}
+# percentage of outliers on the right tail
+outlier.percent <- c(whisker(data$owts),
+                     whisker(data$ag_runoff)) * 100 
+names(outlier.percent) <- names3[1:2]
+print(round(outlier.percent, 2))
+```
+
+Similarly, we check whether we can apply some transformation to avoid this issue. For OWTS, we notice that log transformation works while square root transformation does not work. For agricultural runoff, both of them do not work.
+
+```{r}
+# Sex
+oc.check(data$owts, method = 'log')
+oc.check(data$owts, method = 'sqrt')
+
+# agricultural runoff 
+oc.check(data$ag_runoff, method = 'log')
+oc.check(data$ag_runoff, method = 'sqrt')
+```
+
+Since there are outliers on both left and right tails, we apply both bottom coding and top coding on agricultural runoff. After applying this, it appears more well-behaved.
+
+```{r}
+x3.2.trans <- coding(data$ag_runoff, tail = 'both')
+oc.check(x3.2.trans, method = 'power', degree = 1) * 100
+hist(x3.2.trans, col = 'white', border = 'magenta',
+     main = 'Agricultural runoff', xlab = '')
+x3.trans <- cbind(log(data$owts + 1e-4), 
+                  x3.2.trans)
+data$owts <- log(data$owts + 1e-4)
+data$ag_runoff <- x3.2.trans
+```
+
+Next, we try if we can use top coding to resolve
+
+Next, we take a look at the spatial distribution of the transformed variables.
+
+1.  For OWTS, we observe larger values on the west.
+2.  For agricultural runoff, we observe large values on the west but some small values on the east, which exhibit some spatial patterns. This is to be expected as those regions are closer to the Atlantic ocean and the agricultural runoff may be released to the sea.
+3.  For FEMA Floodplain, there also exist some spatial patterns for regions, which appear to be related to the geography of the domain.
+
+According to OWTS and agricultural runoff, we may deduct that there can be more water population on the west.
+
+```{r}
+ggplot(data = data) + geom_sf(aes(color = log(owts + 1e-4))) + 
+  theme_bw() + labs(title = "Onsite Wastewater Treatment Systems (Log)") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+ggplot(data = data) + geom_sf(aes(color = x3.trans[, 2])) + 
+  theme_bw() + labs(title = "Agricultural runoff (Transformed)") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+ggplot(data = data) + geom_sf(aes(color = as.numeric(fema_floodplain))) + 
+  theme_bw() + labs(title = "FEMA Floodplain") + 
+  theme(panel.grid = element_blank()) +
+  scale_color_gradient(low = "deepskyblue", high = "magenta", 
+                       name = '',
+                       na.value = 'grey')
+```
+
+## **3. Multicollinearity (Overall)**
+
+In this section, we check multicollinearity of all the variables. As we can see, we do not observe any multicollinearity problems here.
+
+```{r}
+vifs <- c()
+vars <- cbind(x1.trans, x2.trans, x3.trans)
+for (j in 1:7) {
+  y.j <- unlist(vars[, j])
+  x.j <- vars[, -j]
+  y.j[which(y.j == Inf)] <- NA
+  mod <- lm(y.j ~ ., data = as.data.frame(x.j))
+  vifs[j] <- 1 / (1 - summary(mod)$r.squared)
+}
+names(vifs) <- c('Satelite-based inundation map', 
+                 'Superfund', 'CAFOs',
+                 'TRI water impact', 
+                 'TRI total impact', 'Onsite Wastewater Treatment Systems',
+                 'Agricultural Runoff')
+print(round(vifs, 2))
+
+st_write(data, "nc_grid_hazard_transformed.gpkg", 
+         layer = "my_layer", driver = "GPKG", append = FALSE)
+```

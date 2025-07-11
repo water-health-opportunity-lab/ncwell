@@ -1,0 +1,496 @@
+---
+title: "Principal Component Analysis for Hazard Module"
+format: html
+toc: true
+editor: visual
+code-fold: true
+self-contained: true
+---
+
+## Principal Component Analysis for Hazard Module
+
+### 1. Load packages and data
+
+First, we load the data below and prepare it for the analysis.
+
+```{r, warning=FALSE}
+# load packages
+library("MASS")
+library("dplyr")
+library("factoextra")
+library("exactextractr")
+library("tigris")
+library("ggplot2")
+library("plotly")
+library("sf")
+library("tibble")
+library("GGally")
+library("cluster")
+library("mclust")
+
+# read data
+data <- st_read('nc_grid_hazard_transformed.gpkg')
+data_capacity <- st_read('nc_grid_capacity_transformed.gpkg')
+
+# add block information
+block <- data_capacity %>%
+  st_drop_geometry() %>% select(grid_id, block_group_name)
+data <- data %>% left_join(block, by = "grid_id")
+
+# total sample size
+(n <- nrow(data))
+
+# dimension
+(p <- ncol(data) - 3)
+
+# make sure variables are numeric
+for (j in 3:10) {
+  data[[j]] <- as.numeric(data[[j]])
+}
+
+# avoid NA
+data <- na.omit(data)
+
+### drop the location information for easier modeling
+data_no_loc <- st_drop_geometry(data)
+data_no_loc <- data_no_loc[, -c(1:2, 11)]
+
+### Scale the data
+scaled_data <- scale(data_no_loc)
+colnames(scaled_data) <- c('Satelite-based inundation map', 
+                 'Superfund', 'CAFOs',
+                 'TRI water impact', 
+                 'TRI total impact', 'Onsite Wastewater Treatment Systems',
+                 'Agricultural Runoff', 
+                 'FEMA Floodplain')
+```
+
+### 2. PCA and Index Construction
+
+Next, we perform the PCA and check the proportion of variance explained by different PCs. As we can observe below, the first five PCs explained the majority of the variance of the data.
+
+```{r}
+### principal component analysis (PCA)
+pca <- prcomp(scaled_data, center = FALSE, scale. = FALSE)
+
+##################################### Scree plot
+fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
+  labs(title = "Scree Plot for Principal Component Analysis", 
+       x = "Principal Components", y = "Percentage of Variance Explained") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+```
+
+To make the PCs more interpretable, we apply a varimax rotation to the loadings.
+
+```{r}
+p <- ncol(scaled_data)
+rot <- varimax(pca$rotation)$rotmat
+rownames(rot) <- colnames(scaled_data)
+PCs <- scaled_data %*% rot
+
+## interpretation of the first 5 PCs
+# PC1
+w1 <- round(rot[, 1], 2)
+w1[which(w1 > 0.3)]
+
+# PC2
+w2 <- round(rot[, 2], 2)
+w2[which(w2 > 0.3)]
+
+# PC3
+w3 <- round(rot[, 3], 2)
+w3[which(w3 > 0.3)]
+
+# PC4
+w4 <- round(rot[, 4], 2)
+w4[which(w4 > 0.3)]
+
+# PC5
+w5 <- round(rot[, 5], 2)
+w5[which(w5 > 0.3)]
+```
+
+In summary,
+
+1.  PC1 characterizes regions exposed to flooding risk and toxic water population due to industrial activities.
+2.  PC2 captures regions with toxic contamination from superfund sites and agricultural pollution due to animal feeding
+3.  PC3 captures regions with high density of agricultural animal waste, and widespread use of non-centralized wastewater systems
+4.  PC4 captures regions with industrial pollution and and widespread use of non-centralized wastewater systems. Such places are more likely to be rural areas with more factories.
+5.  PC5 is mainly TRI total impact, which captures industrial pollution.
+
+To interpret this PC, let us visualize the content of the first two PCs in terms of their contribution. For variable $j$ and PC $k$, the contribution of variable $j$ is defined as
+
+$$
+\mathrm{Contribution}_{jk} = \frac{l_{jk}^2}{\sum_{j=1}^p l_{jk}^2}
+$$
+
+where $l_{jk}$ is the loading of variable $j$ on PC $k$. So, the contribution of variable $j$ to the first $m$ PCs is defined as
+
+$$
+\mathrm{Contribution}_{j} = \sum_{k=1}^m \mathrm{Contribution}_{jk}
+$$
+
+The following plot presents the correlation between a variable and the PCs, where
+
+1.  the magnitude of contribution is presented in terms of red, where variables with redder color have more contribution.
+2.  if the arrows are closer to the PCs, it means the variables are more correlated with the PCs.
+3.  both x-axis and y-axis represent the correlation.
+
+```{r}
+##################################### Visualize the first two PCs
+library(ggplot2)
+library(grid)  # for unit()
+
+# Assume rotated_loadings is a matrix from varimax()
+df <- as.data.frame(rot[, 1:2])
+colnames(df) <- c("PC1", "PC2")
+df$varnames <- rownames(df)
+
+# Compute contribution (squared length of vector)
+df$contrib <- df$PC1 ^ 2 / sum(df$PC1 ^ 2) + df$PC2 ^ 2 / sum(df$PC2 ^ 2)
+
+# Normalize contribution for scaling (optional)
+df$scale <- sqrt(df$contrib / max(df$contrib))  # scale factor for arrow length
+
+# Apply scaling to PC1 and PC2 for proportional arrow length
+df$PC1_scaled <- df$PC1 * df$scale
+df$PC2_scaled <- df$PC2 * df$scale
+
+# Create unit circle
+theta <- seq(0, 2 * pi, length.out = 100)
+circle <- data.frame(x = cos(theta), y = sin(theta))
+
+# Plot
+ggplot(df, aes(x = 0, y = 0)) +
+  geom_path(data = circle, aes(x = x, y = y), inherit.aes = FALSE, color = "gray") +
+  geom_segment(aes(xend = PC1_scaled, yend = PC2_scaled, color = contrib),
+               arrow = arrow(length = unit(0.2, "cm")),
+               size = 2) +
+  geom_text(aes(x = PC1_scaled, y = PC2_scaled, label = varnames, color = contrib),
+            hjust = 0.5, vjust = -0.8, size = 4, fontface = "bold") +
+  scale_color_gradient(low = "white", high = "red") +
+  coord_fixed() +
+  theme_minimal() +
+  labs(title = "PCA Correlation Circle (Varimax Rotated)",
+       x = "Rotated PC1", y = "Rotated PC2", color = "Contribution")
+```
+
+So, we can observe that FEMA Floodplain, Agricultural Runoff, Superfund, and Satelite-based inundation map are the contributing variables to the index of hazard module in terms of the first two PCs.
+
+Next, we consider using weighted average of the PCs, where the weights can be determined based on expert opinions. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
+
+```{r}
+## raw distribution of the index
+index <- apply(PCs[, 1:5], 1, mean)
+hist(index, main = 'Raw Hazard Index', col = 'white',
+     border = 'magenta')
+
+## transformation
+lmod <- lm(index - min(index) + 1e-4 ~ 1)
+bc <- boxcox(lmod)
+(lambda <- bc$x[which.max(bc$y)])
+index <- (index - min(index)) / (max(index) - min(index))
+index <- index ^ (as.numeric(lambda))
+data$index <- index
+```
+
+Let us tentatively use positive weights for those 5 PCs. To make the results more interpretable, we can compute the contribution of the variables below. Note that Satelite-based inundation map, Superfund, CAFOs, and FEMA Floodplain are the variables with high contribution.
+
+```{r}
+# Compute squared loadings
+loadings <- pca$rotation
+squared_loadings <- loadings^2
+
+# Compute percentage contribution
+contrib <- sweep(squared_loadings, 2, 
+                 colSums(squared_loadings), FUN = "/")
+
+# View contribution
+cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
+print(cont)
+cont[which(cont > 60)]
+```
+
+It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
+
+```{r}
+par(mfrow = c(1, 2))
+hist(index, col = 'white', border = 'magenta',
+     xlab = '',
+     main = 'Index for Hazard Module')
+boxplot(index, col = 'white', 
+        border = 'magenta', xlab = '',
+        main = 'Index for Hazard Module')
+```
+
+### 3. Visualization and Validation of the Index
+
+Next, we perform clustering to validate the index. PCA is a linear mapping of the data. However, clustering can reveal non-linear structures of the data. So, it can serve as a validation method to check if the non-linear structure really meets our real-life expectation.
+
+For simplicity, let us start with $K$-means clustering. First, we determine the number of clusters by assuming that the index follows a mixture of several normal distributions, each representing a distinct group. Under this assumption, model-based criteria such as the Bayesian Information Criterion (BIC) can be used to select the optimal number of clusters. This approach is preferred here because alternative model-free methods are computationally intensive and less feasible for large spatial datasets.
+
+```{r}
+mod <- Mclust(index)
+summary(mod)  # Includes BIC-based optimal number of clusters
+```
+
+According to the results above, we can choose $K = 9$. To interpret the clustering results, we visualize the spatial distribution of the clusters below in some western counties in NC state, e.g., Henderson County, Buncombe County, and Watauga County. To aid comparison with the index, the clusters are ordered according to their mean index values. For reference, the numerical index is also plotted.
+
+```{r}
+# K-means with 6 clusters
+mod.kmeans <- kmeans(index, centers = 9)
+data$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+data$cluster <- cluster_map[as.character(data$cluster_raw)] 
+data$cluster <- as.factor(data$cluster)
+
+# plot
+data$cluster <- as.numeric(as.character(data$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "slateblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "seagreen1",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(data, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = data$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = c("deepskyblue", "magenta"),
+  domain = data$index,
+  na.color = "grey"
+)
+
+# Interactive leaflet map
+### subset
+data_henderson <- data_lonlat[which(grepl("Henderson County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index),
+    color = ~pal_index(index),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Henderson County</strong>",
+    position = "bottomleft"
+  )
+```
+
+Next, we take a look at the distribution of the clusters and index for the Buncombe County.
+
+```{r}
+# Interactive leaflet map
+### subset
+data_buncombe <- data_lonlat[which(grepl("Buncombe County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index),
+    color = ~pal_index(index),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Buncombe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+Then, we look at the distribution of the clusters and index for the Watauga County.
+
+```{r}
+# Interactive leaflet map
+### subset
+data_watauga <- data_lonlat[which(grepl("Watauga County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index),
+    color = ~pal_index(index),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Watauga County</strong>",
+    position = "bottomleft"
+  )
+```
+
+As an additional check, we may look at the distribution of the index and the clustering results for Guilford County, where Greensboro is known for a lot of TRI releases and industrial activity. Note that most of the regions round Greensboro are marked in red, which are consistent with our expectation.
+
+```{r}
+# Interactive leaflet map
+### subset
+data_guilford <- data_lonlat[which(grepl("Guilford County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_guilford, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index),
+    color = ~pal_index(index),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) 
+```
+
+Alternatively, we may check Wayne county, which has been known for large-scale animal farming. Note that most of the regions are marked in red, which are consistent with our expectation.
+
+```{r}
+# Interactive leaflet map
+### subset
+data_wayne <- data_lonlat[which(grepl("Wayne County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_wayne, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index),
+    color = ~pal_index(index),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) 
+```
