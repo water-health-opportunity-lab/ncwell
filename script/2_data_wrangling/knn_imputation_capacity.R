@@ -37,7 +37,7 @@ for (var in cols){
     neighbor_idx <- complete_rows[neighbors[j, ]]
     selected_vals <- data[[var]][neighbor_idx]
     
-    data[[var]][i] <- mean(selected_vals, na.rm = TRUE)
+    data[[var]][i] <- median(selected_vals, na.rm = TRUE)
   }
 }
 

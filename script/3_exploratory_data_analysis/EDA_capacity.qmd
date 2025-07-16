@@ -1165,14 +1165,4 @@ data_transform <- data[, - c(26, 28)]
 
 st_write(data_transform, "nc_grid_capacity_transformed_no_impute.gpkg", 
          layer = "my_layer", driver = "GPKG", append = FALSE)
-
-# imputation
-# for (j in 4:26) {
-#   x.j <- data_transform[[j]]
-#   x.j[is.na(x.j) == TRUE] <- median(x.j, na.rm = TRUE)
-#   data_transform[[j]] <- x.j
-# }
-# 
-# st_write(data_transform, "nc_grid_capacity_transformed.gpkg", 
-#          layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
