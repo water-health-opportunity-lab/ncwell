@@ -1,0 +1,2278 @@
+---
+title: "Interactive Maps of Contamination Risk in North Carolina State"
+format: html
+toc: true
+editor: visual
+code-fold: true
+warning: false 
+message: false
+self-contained: true
+tabset: true
+---
+
+## Introduction
+
+In this document, we present interactive maps of contamination risk in North Carolina State. The main objective is to quantify and visualize the post-hurricane contamination risk for private wells. We measure it by a risk score, which is defined as
+
+$$
+\text{Risk} = \frac{\text{Hazard} \times \text{Vulnerability}}{\exp(2\times \text{Capacity})}.
+$$
+
+The risk score is a ratio between the product of the hazard index and vulnerability index, and capacity index. Note that
+
+1.  Hazard index quantifies how a region is vulnerable to pollution sources. It consists of variables, including, satellite-based inundation map, superfund, Concentrated Animal Feeding Operations (CAFOs), Toxics Release Inventory (TRI) water impact, TRI total impact, onsite wastewater treatment systems, agricultural runoff, and Federal Emergency Management Agency (FEMA) floodplain.
+2.  Vulnerability index measures how a region is vulnerable to groundwater contaminants. It contains multiple groups of variables, including, geology, groundwater, hydroclimate, landscape, soil geochemistry, and soil properties.
+3.  Capacity index captures the ability of a region to gather individual and collective resources to adapt to extreme climate events. It includes multiple groups of variables, including, race/ethnicity, socioeconomic variables, health risk, immigration status, social cohesion, institution capacity, built environment, and other social determinants (e.g., lack of internet and computer).
+
+Since the indices for hazard, vulnerability, and capacity are between 0 and 1, for better interpretability, we standardize the risk score into a range between 0 and 1.
+
+We provide interactive maps for the overall risk scores and those three indices. Along with the risk score, we also include maps for the clusters, which gather the regions with similar characteristics of risk score (or index) into one group. We label the clusters by the mean of the risk score (or index) from the smallest to the highest. For example, a cluster labeled as 3 will have a higher contamination risk than that labeled as 2. Last, the interactive maps are provided for six counties:
+
+1.  Buncombe county
+2.  Henderson county
+3.  Watauga county
+4.  Avery county
+5.  Ashe county
+6.  Mitchell county
+
+### 1. Buncombe county
+
+```{r, warning=FALSE,echo=FALSE,message=FALSE,results='hide'}
+# load packages
+library("MASS")
+library("dplyr")
+library("factoextra")
+library("exactextractr")
+library("tigris")
+library("ggplot2")
+library("plotly")
+library("sf")
+library("tibble")
+library("GGally")
+library("cluster")
+library("mclust")
+
+# read data
+index_capacity <- st_read('index_capacity.gpkg')
+index_vulnerability <- st_read('index_vulnerability.gpkg')
+index_hazard <- st_read('index_hazard.gpkg')
+
+# index
+colnames(index_capacity)[4] <- 'index_capacity'
+colnames(index_hazard)[4] <- 'index_hazard'
+colnames(index_vulnerability)[4] <- 'index_vulnerability'
+
+# merging
+index <- index_vulnerability %>% st_drop_geometry() %>% 
+  left_join(index_hazard, by = "grid_id") %>%
+  left_join(index_capacity, by = "grid_id")
+index <- index[, c(1, 2, 3, 4, 7, 11, 8)]
+colnames(index)[c(1, 3, 7)] <- c('ID', 'block_group_name', 'geom')
+index <- st_as_sf(index, sf_column_name = "geom")
+
+# risk score computation
+index$risk <- (index$index_vulnerability) * (index$index_hazard) / 
+  exp(2 * index$index_capacity)
+index$risk <- (index$risk - min(index$risk)) / (max(index$risk) - min(index$risk))
+```
+
+::: panel-tabset
+#### Overall Risk Score
+
+```{r,message=FALSE}
+## BIC-based number of clusters
+set.seed(666)
+mod <- Mclust(index$risk)
+
+# K-means with 8 clusters
+mod.kmeans <- kmeans(index$risk, centers = 9)
+index$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index$risk, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+index$cluster <- cluster_map[as.character(index$cluster_raw)] 
+index$cluster <- as.factor(index$cluster)
+
+# plot
+index$cluster <- as.numeric(as.character(index$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index$index,
+  na.color = "grey"
+)
+
+# Interactive leaflet map
+### subset
+data_buncombe <- data_lonlat[which(grepl("Buncombe County", index$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(risk),
+    color = ~pal_index(risk),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Risk",
+    popup = ~paste("Risk:", round(risk, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~risk, title = "Risk", group = "Risk") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Risk"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Buncombe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Hazard Index
+
+```{r, message=FALSE}
+mod.kmeans <- kmeans(index_hazard$index_hazard, centers = 9)
+index_hazard$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_hazard$index_hazard, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_hazard$cluster <- cluster_map[as.character(index_hazard$cluster_raw)] 
+index_hazard$cluster <- as.factor(index_hazard$cluster)
+
+index_hazard$cluster <- as.numeric(as.character(index_hazard$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_hazard, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_hazard$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_hazard$index_hazard,
+  na.color = "grey"
+)
+
+data_buncombe <- data_lonlat[which(grepl("Buncombe County", index_hazard$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_hazard),
+    color = ~pal_index(index_hazard),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_hazard, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_hazard, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Buncombe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Vulnerability Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_vulnerability$index_vulnerability, centers = 9)
+index_vulnerability$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_vulnerability$index_vulnerability, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_vulnerability$cluster <- cluster_map[as.character(index_vulnerability$cluster_raw)] 
+index_vulnerability$cluster <- as.factor(index_vulnerability$cluster)
+
+index_vulnerability$cluster <- as.numeric(as.character(index_vulnerability$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_vulnerability, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_vulnerability$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_vulnerability$index_vulnerability,
+  na.color = "grey"
+)
+
+data_buncombe <- data_lonlat[which(grepl("Buncombe County", index_vulnerability$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_vulnerability),
+    color = ~pal_index(index_vulnerability),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_vulnerability, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_vulnerability, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Buncombe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Capacity Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_capacity$index_capacity, centers = 9)
+index_capacity$cluster_raw <- mod.kmeans$cluster
+mean_index_by_cluster <- tapply(index_capacity$index_capacity, mod.kmeans$cluster, mean)
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_capacity$cluster <- cluster_map[as.character(index_capacity$cluster_raw)] 
+index_capacity$cluster <- as.factor(index_capacity$cluster)
+index_capacity$cluster <- as.numeric(as.character(index_capacity$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_capacity, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_capacity$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_capacity$index_capacity,
+  na.color = "grey"
+)
+
+data_buncombe <- data_lonlat[which(grepl("Buncombe County", index_capacity$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_capacity),
+    color = ~pal_index(index_capacity),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_capacity, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_capacity, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Buncombe County</strong>",
+    position = "bottomleft"
+  )
+```
+:::
+
+### 2. Henderson County
+
+::: panel-tabset
+#### Overall Risk Score
+
+```{r,message=FALSE}
+# K-means with 9 clusters
+mod.kmeans <- kmeans(index$risk, centers = 9)
+index$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index$risk, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+index$cluster <- cluster_map[as.character(index$cluster_raw)] 
+index$cluster <- as.factor(index$cluster)
+
+# plot
+index$cluster <- as.numeric(as.character(index$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index$index,
+  na.color = "grey"
+)
+
+# Interactive leaflet map
+### subset
+data_henderson <- data_lonlat[which(grepl("Henderson County", index$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(risk),
+    color = ~pal_index(risk),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Risk",
+    popup = ~paste("Risk:", round(risk, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~risk, title = "Risk", group = "Risk") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Risk"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Buncombe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Hazard Index
+
+```{r, message=FALSE}
+mod.kmeans <- kmeans(index_hazard$index_hazard, centers = 9)
+index_hazard$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_hazard$index_hazard, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_hazard$cluster <- cluster_map[as.character(index_hazard$cluster_raw)] 
+index_hazard$cluster <- as.factor(index_hazard$cluster)
+
+index_hazard$cluster <- as.numeric(as.character(index_hazard$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_hazard, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_hazard$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_hazard$index_hazard,
+  na.color = "grey"
+)
+
+data_henderson <- data_lonlat[which(grepl("Henderson County", index_hazard$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_hazard),
+    color = ~pal_index(index_hazard),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_hazard, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_hazard, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Henderson County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Vulnerability Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_vulnerability$index_vulnerability, centers = 9)
+index_vulnerability$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_vulnerability$index_vulnerability, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_vulnerability$cluster <- cluster_map[as.character(index_vulnerability$cluster_raw)] 
+index_vulnerability$cluster <- as.factor(index_vulnerability$cluster)
+
+index_vulnerability$cluster <- as.numeric(as.character(index_vulnerability$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_vulnerability, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_vulnerability$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_vulnerability$index_vulnerability,
+  na.color = "grey"
+)
+
+data_henderson <- data_lonlat[which(grepl("Henderson County", index_vulnerability$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_vulnerability),
+    color = ~pal_index(index_vulnerability),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_vulnerability, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_vulnerability, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Henderson County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Capacity Index
+
+```{r}
+mod.kmeans <- kmeans(index_capacity$index_capacity, centers = 9)
+index_capacity$cluster_raw <- mod.kmeans$cluster
+mean_index_by_cluster <- tapply(index_capacity$index_capacity, mod.kmeans$cluster, mean)
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_capacity$cluster <- cluster_map[as.character(index_capacity$cluster_raw)] 
+index_capacity$cluster <- as.factor(index_capacity$cluster)
+index_capacity$cluster <- as.numeric(as.character(index_capacity$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_capacity, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_capacity$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_capacity$index_capacity,
+  na.color = "grey"
+)
+
+data_henderson <- data_lonlat[which(grepl("Henderson County", index_capacity$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_capacity),
+    color = ~pal_index(index_capacity),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_capacity, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_capacity, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Henderson County</strong>",
+    position = "bottomleft"
+  )
+```
+:::
+
+### 3. Watauga County
+
+::: panel-tabset
+#### Overall Risk Score
+
+```{r,message=FALSE}
+# K-means with 9 clusters
+mod.kmeans <- kmeans(index$risk, centers = 9)
+index$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index$risk, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+index$cluster <- cluster_map[as.character(index$cluster_raw)] 
+index$cluster <- as.factor(index$cluster)
+
+# plot
+index$cluster <- as.numeric(as.character(index$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index$index,
+  na.color = "grey"
+)
+
+# Interactive leaflet map
+### subset
+data_watauga <- data_lonlat[which(grepl("Watauga County", index$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(risk),
+    color = ~pal_index(risk),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Risk",
+    popup = ~paste("Risk:", round(risk, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~risk, title = "Risk", group = "Risk") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Risk"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Watauga County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Hazard Index
+
+```{r, message=FALSE}
+mod.kmeans <- kmeans(index_hazard$index_hazard, centers = 9)
+index_hazard$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_hazard$index_hazard, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_hazard$cluster <- cluster_map[as.character(index_hazard$cluster_raw)] 
+index_hazard$cluster <- as.factor(index_hazard$cluster)
+
+index_hazard$cluster <- as.numeric(as.character(index_hazard$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_hazard, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_hazard$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_hazard$index_hazard,
+  na.color = "grey"
+)
+
+data_watauga <- data_lonlat[which(grepl("Watauga County", index_hazard$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_hazard),
+    color = ~pal_index(index_hazard),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_hazard, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_hazard, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Watauga County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Vulnerability Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_vulnerability$index_vulnerability, centers = 9)
+index_vulnerability$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_vulnerability$index_vulnerability, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_vulnerability$cluster <- cluster_map[as.character(index_vulnerability$cluster_raw)] 
+index_vulnerability$cluster <- as.factor(index_vulnerability$cluster)
+
+index_vulnerability$cluster <- as.numeric(as.character(index_vulnerability$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_vulnerability, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_vulnerability$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_vulnerability$index_vulnerability,
+  na.color = "grey"
+)
+
+data_watauga <- data_lonlat[which(grepl("Watauga County", index_vulnerability$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_vulnerability),
+    color = ~pal_index(index_vulnerability),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_vulnerability, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_vulnerability, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Watauga County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Capacity Index
+
+```{r}
+mod.kmeans <- kmeans(index_capacity$index_capacity, centers = 9)
+index_capacity$cluster_raw <- mod.kmeans$cluster
+mean_index_by_cluster <- tapply(index_capacity$index_capacity, mod.kmeans$cluster, mean)
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_capacity$cluster <- cluster_map[as.character(index_capacity$cluster_raw)] 
+index_capacity$cluster <- as.factor(index_capacity$cluster)
+index_capacity$cluster <- as.numeric(as.character(index_capacity$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_capacity, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_capacity$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_capacity$index_capacity,
+  na.color = "grey"
+)
+
+data_watauga <- data_lonlat[which(grepl("Watauga County", index_capacity$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_capacity),
+    color = ~pal_index(index_capacity),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_capacity, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_capacity, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Watauga County</strong>",
+    position = "bottomleft"
+  )
+```
+:::
+
+### 4. Avery County
+
+::: panel-tabset
+#### Overall Risk Score
+
+```{r,message=FALSE}
+# K-means with 9 clusters
+mod.kmeans <- kmeans(index$risk, centers = 9)
+index$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index$risk, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+index$cluster <- cluster_map[as.character(index$cluster_raw)] 
+index$cluster <- as.factor(index$cluster)
+
+# plot
+index$cluster <- as.numeric(as.character(index$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index$index,
+  na.color = "grey"
+)
+
+# Interactive leaflet map
+### subset
+data_avery <- data_lonlat[which(grepl("Avery County", index$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_avery, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(risk),
+    color = ~pal_index(risk),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Risk",
+    popup = ~paste("Risk:", round(risk, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~risk, title = "Risk", group = "Risk") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Risk"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Avery County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Hazard Index
+
+```{r, message=FALSE}
+mod.kmeans <- kmeans(index_hazard$index_hazard, centers = 9)
+index_hazard$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_hazard$index_hazard, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_hazard$cluster <- cluster_map[as.character(index_hazard$cluster_raw)] 
+index_hazard$cluster <- as.factor(index_hazard$cluster)
+
+index_hazard$cluster <- as.numeric(as.character(index_hazard$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_hazard, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_hazard$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_hazard$index_hazard,
+  na.color = "grey"
+)
+
+data_avery <- data_lonlat[which(grepl("Avery County", index_hazard$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_avery, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_hazard),
+    color = ~pal_index(index_hazard),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_hazard, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_hazard, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Avery County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Vulnerability Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_vulnerability$index_vulnerability, centers = 9)
+index_vulnerability$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_vulnerability$index_vulnerability, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_vulnerability$cluster <- cluster_map[as.character(index_vulnerability$cluster_raw)] 
+index_vulnerability$cluster <- as.factor(index_vulnerability$cluster)
+
+index_vulnerability$cluster <- as.numeric(as.character(index_vulnerability$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_vulnerability, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_vulnerability$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_vulnerability$index_vulnerability,
+  na.color = "grey"
+)
+
+data_avery <- data_lonlat[which(grepl("Avery County", index_vulnerability$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_avery, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_vulnerability),
+    color = ~pal_index(index_vulnerability),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_vulnerability, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_vulnerability, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Avery County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Capacity Index
+
+```{r}
+mod.kmeans <- kmeans(index_capacity$index_capacity, centers = 9)
+index_capacity$cluster_raw <- mod.kmeans$cluster
+mean_index_by_cluster <- tapply(index_capacity$index_capacity, mod.kmeans$cluster, mean)
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_capacity$cluster <- cluster_map[as.character(index_capacity$cluster_raw)] 
+index_capacity$cluster <- as.factor(index_capacity$cluster)
+index_capacity$cluster <- as.numeric(as.character(index_capacity$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_capacity, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_capacity$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_capacity$index_capacity,
+  na.color = "grey"
+)
+
+data_avery <- data_lonlat[which(grepl("Avery County", index_capacity$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_avery, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_capacity),
+    color = ~pal_index(index_capacity),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_capacity, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_capacity, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Avery County</strong>",
+    position = "bottomleft"
+  )
+```
+:::
+
+### 5. Ashe County
+
+::: panel-tabset
+#### Overall Risk Score
+
+```{r,message=FALSE}
+# K-means with 9 clusters
+mod.kmeans <- kmeans(index$risk, centers = 9)
+index$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index$risk, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+index$cluster <- cluster_map[as.character(index$cluster_raw)] 
+index$cluster <- as.factor(index$cluster)
+
+# plot
+index$cluster <- as.numeric(as.character(index$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index$index,
+  na.color = "grey"
+)
+
+# Interactive leaflet map
+### subset
+data_ashe <- data_lonlat[which(grepl("Ashe County", index$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_ashe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(risk),
+    color = ~pal_index(risk),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Risk",
+    popup = ~paste("Risk:", round(risk, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~risk, title = "Risk", group = "Risk") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Risk"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Ashe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Hazard Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_hazard$index_hazard, centers = 9)
+index_hazard$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_hazard$index_hazard, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_hazard$cluster <- cluster_map[as.character(index_hazard$cluster_raw)] 
+index_hazard$cluster <- as.factor(index_hazard$cluster)
+
+index_hazard$cluster <- as.numeric(as.character(index_hazard$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_hazard, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_hazard$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_hazard$index_hazard,
+  na.color = "grey"
+)
+
+data_ashe <- data_lonlat[which(grepl("Ashe County", index_hazard$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_ashe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_hazard),
+    color = ~pal_index(index_hazard),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_hazard, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_hazard, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Ashe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Vulnerability Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_vulnerability$index_vulnerability, centers = 9)
+index_vulnerability$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_vulnerability$index_vulnerability, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_vulnerability$cluster <- cluster_map[as.character(index_vulnerability$cluster_raw)] 
+index_vulnerability$cluster <- as.factor(index_vulnerability$cluster)
+
+index_vulnerability$cluster <- as.numeric(as.character(index_vulnerability$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_vulnerability, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_vulnerability$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_vulnerability$index_vulnerability,
+  na.color = "grey"
+)
+
+data_ashe <- data_lonlat[which(grepl("Ashe County", index_vulnerability$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_ashe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_vulnerability),
+    color = ~pal_index(index_vulnerability),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_vulnerability, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_vulnerability, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Ashe County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Capacity Index
+
+```{r}
+mod.kmeans <- kmeans(index_capacity$index_capacity, centers = 9)
+index_capacity$cluster_raw <- mod.kmeans$cluster
+mean_index_by_cluster <- tapply(index_capacity$index_capacity, mod.kmeans$cluster, mean)
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_capacity$cluster <- cluster_map[as.character(index_capacity$cluster_raw)] 
+index_capacity$cluster <- as.factor(index_capacity$cluster)
+index_capacity$cluster <- as.numeric(as.character(index_capacity$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_capacity, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_capacity$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_capacity$index_capacity,
+  na.color = "grey"
+)
+
+data_ashe <- data_lonlat[which(grepl("Ashe County", index_capacity$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_ashe, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_capacity),
+    color = ~pal_index(index_capacity),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_capacity, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_capacity, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Ashe County</strong>",
+    position = "bottomleft"
+  )
+```
+:::
+
+### 6. Mitchell County
+
+::: panel-tabset
+#### Overall Risk Score
+
+```{r,message=FALSE}
+# K-means with 9 clusters
+mod.kmeans <- kmeans(index$risk, centers = 9)
+index$cluster_raw <- mod.kmeans$cluster
+
+# Mean index
+mean_index_by_cluster <- tapply(index$risk, mod.kmeans$cluster, mean)
+
+# Order the clusters
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)  # e.g., 3 -> 1, 5 -> 2, ...
+index$cluster <- cluster_map[as.character(index$cluster_raw)] 
+index$cluster <- as.factor(index$cluster)
+
+# plot
+index$cluster <- as.numeric(as.character(index$cluster))
+
+######## Validation plot
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index$index,
+  na.color = "grey"
+)
+
+# Interactive leaflet map
+### subset
+data_mitchell <- data_lonlat[which(grepl("Mitchell County", index$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+# Interactive leaflet map
+leaflet(data_mitchell, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(risk),
+    color = ~pal_index(risk),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Risk",
+    popup = ~paste("Risk:", round(risk, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~risk, title = "Risk", group = "Risk") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Risk"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Mitchell County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Hazard Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_hazard$index_hazard, centers = 9)
+index_hazard$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_hazard$index_hazard, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_hazard$cluster <- cluster_map[as.character(index_hazard$cluster_raw)] 
+index_hazard$cluster <- as.factor(index_hazard$cluster)
+
+index_hazard$cluster <- as.numeric(as.character(index_hazard$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_hazard, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_hazard$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_hazard$index_hazard,
+  na.color = "grey"
+)
+
+data_mitchell <- data_lonlat[which(grepl("Mitchell County", index_hazard$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_mitchell, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_hazard),
+    color = ~pal_index(index_hazard),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_hazard, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_hazard, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Mitchell County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Vulnerability Index
+
+```{r,message=FALSE}
+mod.kmeans <- kmeans(index_vulnerability$index_vulnerability, centers = 9)
+index_vulnerability$cluster_raw <- mod.kmeans$cluster
+
+mean_index_by_cluster <- tapply(index_vulnerability$index_vulnerability, mod.kmeans$cluster, mean)
+
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_vulnerability$cluster <- cluster_map[as.character(index_vulnerability$cluster_raw)] 
+index_vulnerability$cluster <- as.factor(index_vulnerability$cluster)
+
+index_vulnerability$cluster <- as.numeric(as.character(index_vulnerability$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_vulnerability, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_vulnerability$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_vulnerability$index_vulnerability,
+  na.color = "grey"
+)
+
+data_mitchell <- data_lonlat[which(grepl("Mitchell County", index_vulnerability$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_mitchell, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_vulnerability),
+    color = ~pal_index(index_vulnerability),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_vulnerability, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_vulnerability, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Mitchell County</strong>",
+    position = "bottomleft"
+  )
+```
+
+#### Capacity Index
+
+```{r}
+mod.kmeans <- kmeans(index_capacity$index_capacity, centers = 9)
+index_capacity$cluster_raw <- mod.kmeans$cluster
+mean_index_by_cluster <- tapply(index_capacity$index_capacity, mod.kmeans$cluster, mean)
+ordered_cluster_ids <- order(mean_index_by_cluster) 
+cluster_map <- setNames(seq_along(ordered_cluster_ids), ordered_cluster_ids)
+index_capacity$cluster <- cluster_map[as.character(index_capacity$cluster_raw)] 
+index_capacity$cluster <- as.factor(index_capacity$cluster)
+index_capacity$cluster <- as.numeric(as.character(index_capacity$cluster))
+
+custom_colors <- c(
+  "1" = "darkblue",
+  "2" = "royalblue",
+  "3" = "deepskyblue",
+  "4" = "paleturquoise1",
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
+)
+
+library(leaflet)
+
+# transform the coordinates into longitude and latitude
+data_lonlat <- st_transform(index_capacity, crs = 4326)
+
+# Define palettes
+pal_cluster <- colorFactor(
+  palette = custom_colors,
+  domain = index_capacity$cluster
+)
+
+pal_index <- colorNumeric(
+  palette = colorRampPalette(c('#fff7ec', '#7f0000'))(1024),
+  domain = index_capacity$index_capacity,
+  na.color = "grey"
+)
+
+data_mitchell <- data_lonlat[which(grepl("Mitchell County", index_capacity$block_group_name, ignore.case = TRUE) == TRUE), ]
+
+leaflet(data_mitchell, options = leafletOptions(minZoom = 7)) %>%
+  addTiles() %>%
+  
+  # Cluster layer
+  addPolygons(
+    fillColor = ~pal_cluster(cluster),
+    color = ~pal_cluster(cluster),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Cluster",
+    popup = ~paste("Cluster:", cluster)
+  ) %>%
+  
+  # Index layer
+  addPolygons(
+    fillColor = ~pal_index(index_capacity),
+    color = ~pal_index(index_capacity),
+    weight = 1,
+    fillOpacity = 0.5,
+    group = "Index",
+    popup = ~paste("Index:", round(index_capacity, 2))
+  ) %>%
+  
+  addLegend("bottomright", pal = pal_cluster, values = ~cluster, title = "Cluster", group = "Cluster") %>%
+  addLegend("bottomleft", pal = pal_index, values = ~index_capacity, title = "Index", group = "Index") %>%
+  addLayersControl(
+    overlayGroups = c("Cluster", "Index"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addControl(
+    html = "<strong>Showing: Mitchell County</strong>",
+    position = "bottomleft"
+  )
+```
+:::
+
+#### 
+
+## Appendix: Documentation
+
+In this section, we provide the detailed descriptions of the variables in hazard, vulnerability, and capacity modules.
+
+### Hazard Module
+
+The spatial resolution, time period, and data source of the variables in the hazard module are listed below.
+
+| Predictor Group                            | Spatial Resolution | Time Period | Data Source                                                                   |
+|-----------------|-----------------|-----------------|----------------------|
+| Satellite-Based Inundation Map             | 1/8 degree         | 2024        | Global Flood Monitoring System (GFMS), [flood.umd.edu](https://flood.umd.edu) |
+| Superfund Sites                            | Facility-Level     | 2025        | EPA Superfund Enterprise Management System (SEMS)                             |
+| CAFOs (Concentrated Animal Feeding Ops)    | Facility-Level     | 1998--2024  | NCDEQ Animal Feed Operation Permits Facility Map                              |
+| EPA TRI Water Impact                       | Facility-Level     | 2019--2023  | EPA Toxics Release Inventory                                                  |
+| EPA TRI Total Impact                       | Facility-Level     | 2019--2023  | EPA Toxics Release Inventory                                                  |
+| Onsite Wastewater Treatment Systems (OWTS) | Facility-Level     | 1993--2025  | NCDEQ NPDES Wastewater Discharge Permits                                      |
+| Estimated Agricultural Runoff              | 10m                | 2024        | USDA Land Use / Cropland Data Layer                                           |
+| FEMA Floodplain                            | 20--30m            | 2025        | Flood Risk Info System (FRIS), NC Digital Flood Insurance Rate Map (DFIRM)    |
+
+: **Table A2. Hazard predictors used in the Hazard Module.**
+
+The detailed definitions of the variables in the hazard module are listed below.
+
+**Satellite-Based Inundation Map** - Analyzed satellite inundation images from 09/24/2024 00:00 to 09/28/2024 21:00 at 3-hour intervals and extracted the maximum inundation for each 1km grid cell
+
+-   Grid cells without any detected inundation were converted to a "0" value
+
+**Superfund Sites** - Identified superfund sites in North Carolina using the EPA Superfund Enterprise Management System (SEMS)
+
+-   Used a decay function to calculate an impact score for potential exposure risk
+
+**Concentrated Animal Feeding Operation Sites (CAFOs)** - Identified CAFO sites in North Carolina using the NC Department of Environmental Quality List of Permitted Animal Facilities (last updated 11/04/2024)
+
+-   Used a decay function to calculate an impact score for potential exposure risk
+
+**EPA TRI Water Impact** - Identified toxic release facilities in North Carolina and their onsite water releases (lbs.) using the EPA's TRI Toxics Tracker (2019--2023)
+
+-   Used a decay function to calculate an impact score for potential exposure risk
+
+**EPA TRI Total Impact** - Identified toxic release facilities in North Carolina and their total onsite releases (lbs.) using the EPA's TRI Toxics Tracker (2019--2023)
+
+-   Used a decay function to calculate an impact score for potential exposure risk
+
+**Onsite Wastewater Treatment Systems (OWTS)** - Identified wastewater discharge locations in North Carolina using the NCDEQ Wastewater Discharge Permits Map
+
+-   Included both individual and general discharge permits
+
+-   Used a decay function to calculate an impact score for potential exposure risk
+
+**Estimated Agricultural Runoff** - Used the USDA Cropland Data Layer (CDL) to identify crop types across North Carolina
+
+-   Assigned nitrogen fertilizer application rates to each crop type based on established guidelines
+
+-   Converted the crop raster into a nitrogen loading map
+
+-   Calculated the average nitrogen application per 1km × 1km grid cell to estimate relative runoff potential
+
+**FEMA Floodplain** - Used FEMA's National Flood Hazard Layer to identify areas with a 1% annual chance of flooding (100-year flood zones)
+
+-   Checked whether the center point of each 1km × 1km grid cell falls within a 100-year flood zone
+
+-   Flagged grid cells as either within or outside the 100-year floodplain
+
+### 
+
+### Vulnerability Module
+
+We separate the descriptions of the variables into multiple groups, shown as follows.
+
+#### I. Well Use
+
+| Variable Name | Definition                                                   | Unit | Source        | Spatial Scale      | Year |
+|------------|------------|------------|------------|------------|------------|
+| Pct_Wells     | Binary designation (0 or 100%) of public or private well use | \%   | Murray et al. | Census block group | 2023 |
+
+------------------------------------------------------------------------
+
+#### II. Geology
+
+| Variable Name | Definition                                 | Unit        | Source                     | Spatial Scale | Year |
+|------------|------------|------------|------------|------------|------------|
+| bedrock       | Bedrock rock type                          | Categorical | King & Beikman             | Polygon       | 1974 |
+| lith          | Lithologic classification                  | Categorical | Anning & Schweitzer (USGS) | Polygon       | 2017 |
+| surfgeo       | Surficial geology                          | Categorical | Soller et al.              | Polygon       | 2009 |
+| drainage      | Estimated extent of subsurface tile drains | m²          | USGS                       | 30m           | 2012 |
+
+------------------------------------------------------------------------
+
+#### III. Groundwater
+
+| Variable Name         | Definition                                                 | Unit        | Source                | Spatial Scale | Year                 |
+|------------|------------|------------|------------|------------|------------|
+| aq_rocktype           | Aquifer rock type                                          | Categorical | USGS                  | Polygon       | 2003                 |
+| Groundwater variables | Depth to water, transmissivity, water content, travel time | Multiple    | Zell & Sanford (USGS) | 250m          | 2020                 |
+| NO3 (multiple)        | Groundwater nitrate at domestic/public well depths         | mg/L        | Ransom et al.         | 1km           | 1988--2018 (modeled) |
+
+------------------------------------------------------------------------
+
+#### IV. Hydroclimate
+
+| Variable Name / Group  | Definition                                         | Unit          | Source                     | Spatial Scale  | Year       |
+|------------|------------|------------|------------|------------|------------|
+| Base Flow (bfi)        | Base flow index and estimated mean discharge       | \% or mm/yr   | Wolock et al. (USGS)       | 1km            | 1951--1980 |
+| rech                   | Estimated mean annual natural groundwater recharge | mm/yr         | Wolock et al. (USGS)       | 1km            | 1951--1980 |
+| Water Budget Variables | Effective recharge, evapotranspiration, quick-flow | mm/yr or m/yr | Reitz et al. (2017)        | 800m           | 2000--2013 |
+| tmean                  | 30-year normal mean temperature                    | Celsius       | PRISM Climate Group (2021) | 800m           | 1991--2020 |
+| ppt                    | 30-year normal mean precipitation                  | mm            | PRISM Climate Group (2021) | 800m           | 1991--2020 |
+| HUC_12                 | HUC-12 watershed code                              | Code          | EPA EnviroAtlas            | Polygon        | 2025       |
+| stm_den                | Stream density                                     | km/km²        | EPA EnviroAtlas            | HUC-12 Polygon | 2015       |
+
+------------------------------------------------------------------------
+
+#### V. Landscape
+
+| Variable Name              | Definition                                         | Unit        | Source      | Spatial Scale  | Year |
+|------------|------------|------------|------------|------------|------------|
+| Landscape Cover (multiple) | \% cover of land types (e.g., croplands, wetlands) | \%          | EnviroAtlas | HUC-12 Polygon | 2025 |
+| Avg_Buff_Width             | Avg. width of stream buffers downstream from ag.   | Meters      | EnviroAtlas | HUC-12 Polygon | 2025 |
+| landcover                  | 16-category national land cover database           | Categorical | NLCD        | 30m            | 2019 |
+| landuse                    | Land use stratification class                      | Categorical | USDA        | Polygon        | 2015 |
+| elevation                  | Elevation                                          | Meters      | USGS        | 1m             | 2024 |
+
+------------------------------------------------------------------------
+
+#### VI. Soil Geochemistry
+
+| Variable Name     | Definition                            | Unit  | Source              | Spatial Scale | Year       |
+|------------|------------|------------|------------|------------|------------|
+| Soil Geochemistry | Chemical quantities in soil A horizon | mg/kg | Smith et al. (USGS) | 40km          | 2007--2010 |
+
+------------------------------------------------------------------------
+
+#### VII. Soil Properties
+
+| Variable Name / Group      | Definition                                  | Unit     | Source                            | Spatial Scale | Year |
+|------------|------------|------------|------------|------------|------------|
+| Soil Properties (multiple) | Soil composition, pH, K factor, depth, etc. | Multiple | Walkinshaw et al. (UCDavis, USGS) | 800m          | 2020 |
+| Soil Properties (multiple) | T factor, permeability, water capacity      | Multiple | Wolock et al. (USGS, STATSGO)     | 1km           | 1997 |
+
+### Capacity Module
+
+| Variable Name         | Definition                                                 | Unit      | Source | Spatial Scale | Year |
+|------------|------------|------------|------------|------------|------------|
+| pct_minority          | \% of minorities (non-White)                               | \%        | ACS    | Block group   | 2023 |
+| pct_limited_english   | \% of limited English speakers                             | \%        | ACS    | Block group   | 2023 |
+| pct_single_parent     | \% of single-parent households (no spouse, children \< 18) | \%        | ACS    | Block group   | 2023 |
+| pct_unemployed        | Unemployment rate                                          | \%        | ACS    | Block group   | 2023 |
+| pct_no_college        | \% with no post-secondary education (college)              | \%        | ACS    | Block group   | 2023 |
+| pct_poverty           | \% living below 150% of the poverty threshold              | \%        | ACS    | Census tract  | 2023 |
+| pct_women             | \% of women                                                | \%        | ACS    | Block group   | 2023 |
+| pct_over_65           | \% of people \> 65 years old                               | \%        | ACS    | Block group   | 2023 |
+| pct_under_17          | \% of people \< 17 years old                               | \%        | ACS    | Block group   | 2023 |
+| pct_women_gave_birth  | \% of women who had a birth in the past 12 months          | \%        | ACS    | Census tract  | 2023 |
+| pct_insured           | \% insured in the total civilian noninstitutionalized pop. | \%        | ACS    | Census tract  | 2023 |
+| pct_us_born           | \% of population born in the U.S.                          | \%        | ACS    | Census tract  | 2023 |
+| pct_owner_occupied    | \% of owner-occupied households                            | \%        | ACS    | Block group   | 2023 |
+| pct_active_commuting  | \% commuting by transit, walking, or cycling (age ≥ 16)    | \%        | ACS    | Block group   | 2023 |
+| pct_no_move           | \% living in same house as 1 year ago                      | \%        | ACS    | Census tract  | 2023 |
+| pct_gov_workers       | \% of workers ≥ 16 y who are government workers            | \%        | ACS    | Census tract  | 2023 |
+| pct_crowded_housing   | \% of households with \> 1 occupant per room               | \%        | ACS    | Block group   | 2023 |
+| pct_plumbing          | \% of households with complete plumbing                    | \%        | ACS    | Block group   | 2023 |
+| pct_new_home          | \% built after 2008 (rounded to 2010)                      | \%        | ACS    | Block group   | 2023 |
+| pct_no_vehicle        | \% of households without a motor vehicle                   | \%        | ACS    | Block group   | 2023 |
+| pct_no_internet       | \% of households without internet                          | \%        | ACS    | Block group   | 2023 |
+| housing_units_density | Housing units per km²                                      | units/km² | ACS    | Block group   | 2023 |
+
+: **Table A1. Input variables used in the Capacity Module.**
+
+### 

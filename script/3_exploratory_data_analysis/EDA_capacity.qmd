@@ -89,6 +89,10 @@ summary.race <- data.frame(Name = name.race,
                            IQR = iqr.race)
 
 print(summary.race)
+
+### replace missing values
+data$pct_minority[is.na(data$pct_minority) == TRUE]
+
 race <- data.frame(data$pct_minority,
                    data$pct_limited_english)
 ```
@@ -142,7 +146,7 @@ In terms of English proficiency, we check its distribution on the right tail bel
 ```{r}
 quantile(na.omit(data$pct_limited_english), c(.8, .85, .9, .95))
 summary(ifelse(data$pct_limited_english > 0, 1, 0))
-data$bv_limited_english <- ifelse(data$pct_limited_english > 0, 1, 0)
+data$pct_limited_english <- ifelse(data$pct_limited_english > 0, 1, 0)
 
 oc.check <- function(x, level = .99, method = 'power', degree) {
   x[which(x == Inf)] <- NA
@@ -197,8 +201,8 @@ ggplot(data = data) + geom_sf(aes(color = pct_minority)) +
                        na.value = 'grey')
 
 ggplot(data = data) +
-  geom_sf(aes(color = as.factor(bv_limited_english), 
-              fill = as.factor(bv_limited_english)), size = 0.5) +
+  geom_sf(aes(color = as.factor(pct_limited_english), 
+              fill = as.factor(pct_limited_english)), size = 0.5) +
   scale_fill_manual(values = c("magenta", "deepskyblue")) +
   scale_color_manual(values = c("magenta", "deepskyblue")) +
   theme_bw() +
@@ -351,6 +355,9 @@ hist(x2.3.trans, col = 'white', border = 'magenta',
 x2.trans <- cbind(log(data$pct_single_parent + 1e-4), 
                   log(data$pct_unemployed + 1e-4), 
                   x2.3.trans, data$pct_poverty)
+data$pct_single_parent <- log(data$pct_single_parent + 1e-4)
+data$pct_unemployed <- log(data$pct_unemployed + 1e-4)
+data$pct_no_college <- coding(sqrt(data$pct_no_college), tail = 'right')
 ```
 
 ```{r}
@@ -551,6 +558,13 @@ x3.trans <- cbind(log(data$pct_women + 1e-4),
                   data$pct_under_17,
                   log(data$pct_women_gave_birth + 1e-4), 
                   x3.5.trans)
+
+# replacement
+data$pct_women <- log(data$pct_women + 1e-4)
+data$pct_over_65 <- log(data$pct_over_65 + 1e-4)
+data$pct_women_gave_birth <- log(data$pct_women_gave_birth + 1e-4)
+data$pct_insured <- coding(log(data$pct_insured + 1e-4), 
+                           tail = 'left')
 ```
 
 Next, we visualize the spatial distribution of those variables below.
@@ -665,6 +679,8 @@ x4.trans <- coding(log(data$pct_us_born + 1e-4), tail = 'left')
 oc.check(x4.trans, method = 'power', degree = 1) * 100
 hist(x4.trans, col = 'white', border = 'magenta',
      main = name.is[1], xlab = '')
+
+data$pct_us_born <- coding(log(data$pct_us_born + 1e-4), tail = 'left')
 ```
 
 Last, we check its spatial distribution below.
@@ -762,6 +778,10 @@ hist(x5.3.trans, col = 'white', border = 'magenta',
 x5.trans <- cbind(log(data$pct_owner_occupied + 1e-4), 
                   log(data$pct_active_commuting + 1e-4), 
                   x5.3.trans)
+
+data$pct_owner_occupied <- log(data$pct_owner_occupied + 1e-4)
+data$pct_active_commuting <- log(data$pct_active_commuting + 1e-4)
+data$pct_no_move <- coding(sqrt(data$pct_no_move), tail = 'left')
 ```
 
 Next, we visualize its spatial distribution below.
@@ -827,6 +847,7 @@ Next, we check whether we can do some transformation to resolve this issue. From
 oc.check(data$pct_gov_workers, method = 'log')
 oc.check(data$pct_gov_workers, method = 'sqrt')
 x6.trans <- sqrt(data$pct_gov_workers)
+data$pct_gov_workers <- sqrt(data$pct_gov_workers)
 ```
 
 ### **2.7 Built environment**
@@ -885,6 +906,10 @@ oc.check(data$pct_new_home, method = 'sqrt')
 x7.trans <- cbind(log(data$pct_crowded_housing + 1e-4),
                   log(data$pct_plumbing + 1e-4),
                   sqrt(data$pct_new_home))
+
+data$pct_crowded_housing <- log(data$pct_crowded_housing + 1e-4)
+data$pct_plumbing <- log(data$pct_plumbing + 1e-4)
+data$pct_new_home <- sqrt(data$pct_new_home)
 ```
 
 Next, we visualize their spatial distribution below.
@@ -1018,6 +1043,13 @@ x8.trans <- cbind(log(data$pct_no_vehicle + 1e-4),
                   log(data$pop_density + 1e-4),
                   log(data$housing_units_density + 1e-4),
                   log(data$households_density + 1e-4))
+
+data$pct_no_vehicle <- log(data$pct_no_vehicle + 1e-4)
+data$pct_no_internet <- sqrt(data$pct_no_internet)
+data$pct_no_computer <- sqrt(data$pct_no_computer)
+data$pop_density <- log(data$pop_density + 1e-4)
+data$housing_units_density <- log(data$housing_units_density + 1e-4)
+data$households_density <- log(data$households_density + 1e-4)
 ```
 
 Next, we visualize their spatial distributions below.
@@ -1122,4 +1154,22 @@ while (max(na.omit(vifs0)) > 10) {
 # which variables to remove
 print(nn)
 print(vifs0)
+
+# final data
+x.trans <- cbind(x1.trans, x2.trans, 
+                 x3.trans, x4.trans, 
+                 x5.trans, x6.trans,
+                 x7.trans, x8.trans)
+# print 
+data_transform <- data[, - c(26, 28)]
+
+# imputation
+for (j in 4:26) {
+  x.j <- data_transform[[j]]
+  x.j[is.na(x.j) == TRUE] <- median(x.j, na.rm = TRUE)
+  data_transform[[j]] <- x.j
+}
+
+st_write(data_transform, "nc_grid_capacity_transformed.gpkg", 
+         layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
