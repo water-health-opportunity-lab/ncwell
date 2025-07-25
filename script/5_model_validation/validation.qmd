@@ -1,0 +1,65 @@
+---
+title: "validation"
+format: html
+---
+
+```{r}
+# ----------------------------------------
+# R Script to validate overall risk index using NCDHHS E. coli testing results
+# Author: Jennifer Zhang
+# Last edited: 2025-07-23
+# ----------------------------------------
+```
+
+## Validation of overall risk index using NCDHHS E. coli testing results
+
+### 1. Load packages and data
+
+First, we load the data below and prepare it for the analysis.
+
+```{r}
+# Load packages
+library(sf)
+library(dplyr)
+
+# Read files
+risk <- st_read("overall_risk.gpkg") # UPDATE
+ncdhhs_data <- read.csv('ecoli_coords.csv')
+
+# Join NCDHHS and risk index
+ncdhhs_points <- st_as_sf(
+  ncdhhs_data,
+  coords = c("Longitude", "Latitude"),
+  crs = st_crs(risk) # SAME AS RISK
+)
+
+ncdhhs_with_risk <- st_join(ncdhhs_points, risk[, c("ID", "risk", "cluster")], left = TRUE)
+```
+
+```{r}
+# Filter out inaccurately geocoded testing locations
+# UPDATE
+
+
+# ROC for cutoff point between contaminated and not contaminated
+
+# [NAHH] Bar graph (proprotion of correctly labeled wells for each risk category)
+
+
+# Create map with well testing results overlaid on risk map
+```
+
+### 2.1 Risk index distribution
+
+### 2.2 Wilcoxon rank-sum test OR t-test
+
+```{r}
+
+
+```
+
+### 2.3 Contamination rates per cluster
+
+## 3.  Logistic regression
+
+## 4.  Threshold for risk index cutoff
