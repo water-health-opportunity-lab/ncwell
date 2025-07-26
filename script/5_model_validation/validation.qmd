@@ -21,19 +21,25 @@ First, we load the data below and prepare it for the analysis.
 # Load packages
 library(sf)
 library(dplyr)
+library(ggplot2)
+library(ROCit)
 
 # Read files
-risk <- st_read("overall_risk.gpkg") # UPDATE
-ncdhhs_data <- read.csv('ecoli_coords.csv')
+risk <- st_read("nc_grid_index.gpkg")
+
+risk_capacity <- st_read("index_capacity.gpkg")
+risk_hazard <- st_read("index_hazard.gpkg")
+risk_vulnerability <- st_read("index_vulnerability.gpkg")
+
+ecoli_data <- read.csv("ecoli_coords.csv")
 
 # Join NCDHHS and risk index
-ncdhhs_points <- st_as_sf(
-  ncdhhs_data,
-  coords = c("Longitude", "Latitude"),
-  crs = st_crs(risk) # SAME AS RISK
-)
+ecoli_sf <- st_as_sf(ecoli_data, coords = c("Longitude", "Latitude"), crs = 4326)
+ecoli_proj <- st_transform(ecoli_sf, st_crs(risk))
+ecoli_with_risk <- st_join(ecoli_proj, risk, join = st_within)
 
-ncdhhs_with_risk <- st_join(ncdhhs_points, risk[, c("ID", "risk", "cluster")], left = TRUE)
+plot(st_geometry(risk), col = 'lightblue', border = NA)
+plot(st_geometry(ecoli_proj), col = 'red', add = TRUE)
 ```
 
 ```{r}
@@ -41,25 +47,140 @@ ncdhhs_with_risk <- st_join(ncdhhs_points, risk[, c("ID", "risk", "cluster")], l
 # UPDATE
 
 
-# ROC for cutoff point between contaminated and not contaminated
+# Turn test results into yes/no
+ecoli_binary <- ecoli_with_risk %>%
+  mutate(Ecoli_Result_Binary = ifelse(trimws(Ecoli_Result) == "<1", "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(trimws(Total_Coliform_Result) == "<1", "Absent", "Present"))
 
-# [NAHH] Bar graph (proprotion of correctly labeled wells for each risk category)
-
-
-# Create map with well testing results overlaid on risk map
+# Map with well testing results overlaid on risk map
 ```
 
-### 2.1 Risk index distribution
-
-### 2.2 Wilcoxon rank-sum test OR t-test
-
+### 2.1.1 Risk index distribution for E. coli
 ```{r}
+ggplot(ecoli_binary) +
+  aes(x = Ecoli_Result_Binary, y = risk) +
+  geom_boxplot() +
+  theme_minimal()
 
+hist(subset(ecoli_binary, Ecoli_Result_Binary == "Present")$risk,
+  main = "Risk index for contaminated wells",
+  xlab = "Risk index"
+)
 
+hist(subset(ecoli_binary, Ecoli_Result_Binary == "Absent")$risk,
+  main = "Risk index for non-contaminated wells",
+  xlab = "Risk index"
+)
+
+shapiro.test(subset(ecoli_binary, Ecoli_Result_Binary == "Present")$risk)
+shapiro.test(subset(ecoli_binary, Ecoli_Result_Binary == "Absent")$risk)
+```
+
+### 2.1.2 Wilcoxon rank-sum test for all counties
+```{r}
+result <- wilcox.test(ecoli_binary$risk ~ ecoli_binary$Ecoli_Result_Binary,
+                      alternative = "less")
+
+# result <- t.test(ecoli_binary$risk[ecoli_binary$Ecoli_Result_Binary == "Present"],
+#                  ecoli_binary$risk[ecoli_binary$Ecoli_Result_Binary == "Absent"],
+#                  var.equal = TRUE, alternative = "greater")
+
+result
+```
+
+### 2.1.3 Wilcoxon rank-sum test by county
+```{r}
+for (county in unique(ecoli_binary$System_Name))
+{
+    print(county)
+    subset_data <- ecoli_binary[ecoli_binary$System_Name == county, ]
+    if (length(unique(subset_data$Ecoli_Result_Binary)) == 2){
+      result <- wilcox.test(risk ~ Ecoli_Result_Binary, data=subset_data, alternative = "less")
+      print(result)
+    }
+}
+```
+
+### 2.2.1 Risk index distribution for Total Coliform
+```{r}
+ggplot(ecoli_binary) +
+  aes(x = Coliform_Result_Binary, y = risk) +
+  geom_boxplot() +
+  theme_minimal()
+
+hist(subset(ecoli_binary, Coliform_Result_Binary == "Present")$risk,
+  main = "Risk index for contaminated wells",
+  xlab = "Risk index"
+)
+
+hist(subset(ecoli_binary, Coliform_Result_Binary == "Absent")$risk,
+  main = "Risk index for non-contaminated wells",
+  xlab = "Risk index"
+)
+
+shapiro.test(subset(ecoli_binary, Coliform_Result_Binary == "Present")$risk)
+shapiro.test(subset(ecoli_binary, Coliform_Result_Binary == "Absent")$risk)
+```
+### 2.2.2 Wilcoxon rank-sum test for all counties
+```{r}
+result <- wilcox.test(ecoli_binary$risk ~ ecoli_binary$Coliform_Result_Binary,
+                      alternative = "less")
+
+# result <- t.test(ecoli_binary$risk[ecoli_binary$Ecoli_Result_Binary == "Present"],
+#                  ecoli_binary$risk[ecoli_binary$Ecoli_Result_Binary == "Absent"],
+#                  var.equal = TRUE, alternative = "greater")
+
+result
+```
+
+### 2.2.3 Wilcoxon rank-sum test by county
+```{r}
+for (county in unique(ecoli_binary$System_Name))
+{
+    print(county)
+    subset_data <- ecoli_binary[ecoli_binary$System_Name == county, ]
+    if (length(unique(subset_data$Coliform_Result_Binary)) == 2){
+      result <- wilcox.test(risk ~ Coliform_Result_Binary, data=subset_data, alternative = "less")
+      print(result)
+    }
+}
 ```
 
 ### 2.3 Contamination rates per cluster
+```{r}
+by(ncdhhs_with_risk$Risk, ncdhhs_with_risk$Cluster, summary)
+```
 
-## 3.  Logistic regression
+## 3.  Logistic regression (https://statsandr.com/blog/binary-logistic-regression-in-r/#quantitative-independent-variable, https://rpubs.com/mbounthavong/logistic_regression_part2)
+```{r}
+ecoli_binary <- ecoli_binary %>%
+                mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result_Binary == "Absent", 0, 1)) %>%
+                mutate(Coliform_Result_Binary = ifelse(Coliform_Result_Binary == "Absent", 0, 1))
 
-## 4.  Threshold for risk index cutoff
+log_model_ecoli <- glm(Ecoli_Result_Binary ~ risk, data = ecoli_binary, family = "binomial")
+summary(log_model_ecoli)
+# exp(coef(log_model)["risk"])
+
+multi_log_ecoli <- glm(Ecoli_Result_Binary ~ index_vulnerability + index_hazard + index_capacity, data = ecoli_binary, family = "binomial")
+summary(multi_log_ecoli)
+
+log_model_coliform <- glm(Coliform_Result_Binary ~ risk, data = ecoli_binary, family = "binomial")
+summary(log_model_coliform)
+# exp(coef(log_model)["risk"])
+
+multi_log_coliform <- glm(Coliform_Result_Binary ~ index_vulnerability + index_hazard + index_capacity, data = ecoli_binary, family = "binomial")
+summary(multi_log_coliform)
+```
+
+## 4.  Threshold for risk index cutoff (https://cran.r-project.org/web/packages/cutpointr/vignettes/cutpointr.html)
+```{r}
+# ROC with Youden's J statistic
+ROCit_obj_ecoli <- rocit(score = ecoli_binary$risk, class = ecoli_binary$Ecoli_Result_Binary)
+plot(ROCit_obj_ecoli)
+
+ROCit_obj_coliform <- rocit(score = ecoli_binary$risk, class = ecoli_binary$Coliform_Result_Binary)
+plot(ROCit_obj_coliform)
+
+# Sensitivity analysis
+```
+
