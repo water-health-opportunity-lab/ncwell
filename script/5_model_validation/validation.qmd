@@ -23,6 +23,7 @@ library(sf)
 library(dplyr)
 library(ggplot2)
 library(ROCit)
+library(cutpointr)
 
 # Read files
 risk <- st_read("nc_grid_index.gpkg")
@@ -37,26 +38,42 @@ ecoli_data <- read.csv("ecoli_coords.csv")
 ecoli_sf <- st_as_sf(ecoli_data, coords = c("Longitude", "Latitude"), crs = 4326)
 ecoli_proj <- st_transform(ecoli_sf, st_crs(risk))
 ecoli_with_risk <- st_join(ecoli_proj, risk, join = st_within)
+```
 
+Most of the samples were taken from western counties in North Carolina. Ashe County, Wautaga County, and Henderson County have the largest sample sizes. 
+
+```{r}
 plot(st_geometry(risk), col = 'lightblue', border = NA)
 plot(st_geometry(ecoli_proj), col = 'red', add = TRUE)
+
+sort(table(ecoli_with_risk$System_Name), decreasing = TRUE)
 ```
+Some of the addresses were not fully reported (i.e. only street or road names were included in the NCDHHS report) and this was reflected after geocoding. We may want to filter out inaccurately geocoded testing locations based on the Accuracy column. The Geod.io documentation suggests using a minimum accuracy threshold of 0.8. 
+
+Continuous E. coli and Coliform testing results were binarized. 
 
 ```{r}
 # Filter out inaccurately geocoded testing locations
-# UPDATE
-
+# UPDATE BASED ON WHETHER FILTERING IS NECESSARY
 
 # Turn test results into yes/no
 ecoli_binary <- ecoli_with_risk %>%
   mutate(Ecoli_Result_Binary = ifelse(trimws(Ecoli_Result) == "<1", "Absent", "Present")) %>%
   mutate(Coliform_Result_Binary = ifelse(trimws(Total_Coliform_Result) == "<1", "Absent", "Present"))
+```
 
+```{r}
 # Map with well testing results overlaid on risk map
 ```
 
 ### 2.1.1 Risk index distribution for E. coli
+
+For E. coli, there are 514 contaminated samples and 38 uncontaminated samples. Based on the histogram and Shapiro-Wilk tests, the distribution of the risk index for both contaminated and uncontaminated samples was non-normal.
+
 ```{r}
+table(ecoli_binary$Ecoli_Result_Binary)
+by(ecoli_binary$risk, ecoli_binary$Ecoli_Result_Binary, summary)
+
 ggplot(ecoli_binary) +
   aes(x = Ecoli_Result_Binary, y = risk) +
   geom_boxplot() +
@@ -77,6 +94,9 @@ shapiro.test(subset(ecoli_binary, Ecoli_Result_Binary == "Absent")$risk)
 ```
 
 ### 2.1.2 Wilcoxon rank-sum test for all counties
+
+There is no significant difference between the mean risk index for contaminated and uncontaminated samples.
+
 ```{r}
 result <- wilcox.test(ecoli_binary$risk ~ ecoli_binary$Ecoli_Result_Binary,
                       alternative = "less")
@@ -102,7 +122,13 @@ for (county in unique(ecoli_binary$System_Name))
 ```
 
 ### 2.2.1 Risk index distribution for Total Coliform
+
+For Coliform, there are 540 contaminated samples and 12 uncontaminated samples. Based on the histogram and Shapiro-Wilk tests, the distribution of the risk index for contaminated samples was non-normal, while the distribution for uncontaminated samples was normal.
+
 ```{r}
+table(ecoli_binary$Coliform_Result_Binary)
+by(ecoli_binary$risk, ecoli_binary$Coliform_Result_Binary, summary)
+
 ggplot(ecoli_binary) +
   aes(x = Coliform_Result_Binary, y = risk) +
   geom_boxplot() +
@@ -122,6 +148,9 @@ shapiro.test(subset(ecoli_binary, Coliform_Result_Binary == "Present")$risk)
 shapiro.test(subset(ecoli_binary, Coliform_Result_Binary == "Absent")$risk)
 ```
 ### 2.2.2 Wilcoxon rank-sum test for all counties
+
+There is a significant difference between the mean risk index for contaminated and uncontaminated samples. The risk index may reflect overall Coliform contamination better than E. coli contamination.
+
 ```{r}
 result <- wilcox.test(ecoli_binary$risk ~ ecoli_binary$Coliform_Result_Binary,
                       alternative = "less")
@@ -148,10 +177,10 @@ for (county in unique(ecoli_binary$System_Name))
 
 ### 2.3 Contamination rates per cluster
 ```{r}
-by(ncdhhs_with_risk$Risk, ncdhhs_with_risk$Cluster, summary)
+# TBD
 ```
 
-## 3.  Logistic regression (https://statsandr.com/blog/binary-logistic-regression-in-r/#quantitative-independent-variable, https://rpubs.com/mbounthavong/logistic_regression_part2)
+## 3.  Logistic regression
 ```{r}
 ecoli_binary <- ecoli_binary %>%
                 mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result_Binary == "Absent", 0, 1)) %>%
@@ -172,7 +201,10 @@ multi_log_coliform <- glm(Coliform_Result_Binary ~ index_vulnerability + index_h
 summary(multi_log_coliform)
 ```
 
-## 4.  Threshold for risk index cutoff (https://cran.r-project.org/web/packages/cutpointr/vignettes/cutpointr.html)
+## 4.  Threshold for risk index cutoff
+
+Youden's J statistic was used to compute the cutoff threshold for contaminated vs. uncontaminated samples. The cutoff was 0.1849 for E. coli and 0.1847 for Coliform.
+
 ```{r}
 # ROC with Youden's J statistic
 ROCit_obj_ecoli <- rocit(score = ecoli_binary$risk, class = ecoli_binary$Ecoli_Result_Binary)
@@ -181,6 +213,18 @@ plot(ROCit_obj_ecoli)
 ROCit_obj_coliform <- rocit(score = ecoli_binary$risk, class = ecoli_binary$Coliform_Result_Binary)
 plot(ROCit_obj_coliform)
 
-# Sensitivity analysis
-```
+# Risk index cutoff for E. coli test result
+ecoli_cp <- cutpointr(ecoli_binary, risk, Ecoli_Result_Binary, pos_class = "Present", neg_class = "Absent", 
+                direction = ">=", method = maximize_metric, metric = youden, na.rm = TRUE)
 
+summary(ecoli_cp)
+
+# Risk index cutoff for Coliform test result
+coliform_cp <- cutpointr(ecoli_binary, risk, Coliform_Result_Binary, pos_class = "Present", neg_class = "Absent", 
+                direction = ">=", method = maximize_metric, metric = youden, na.rm = TRUE)
+
+summary(coliform_cp)
+
+# Sensitivity analysis
+# I'm not sure if this is necessary
+```
