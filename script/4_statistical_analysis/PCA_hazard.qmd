@@ -201,7 +201,6 @@ data$index <- index
 st_write(data[, c(1, 2, 11, 13)], 'index_hazard.gpkg',
          layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
-
 Let us tentatively use positive weights for those 5 PCs. To make the results more interpretable, we can compute the contribution of the variables below. Note that Satelite-based inundation map, Superfund, CAFOs, and FEMA Floodplain are the variables with high contribution.
 
 ```{r}

@@ -83,6 +83,7 @@ fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
 
 In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 14.1% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
 
+
 Before constructing the index, let us first make sure the directionality of the variables is correct. To make the PCs more interpretable, we apply the varimax rotation to the loadings, which maximizes the variance of the loadings within each factor. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted.
 
 ```{r}
@@ -207,6 +208,7 @@ ggplot(df, aes(x = 0, y = 0)) +
 
 So, we can observe that plumbing, pregnancy, and housing units are the contributing variables to the index of capacity module in terms of the first two PCs. Next, we visualize the raw distribution of the index, which turns out to be highly left-skewed. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
 
+
 ```{r}
 ## raw distribution of the index
 index <- apply(PCs, 1, mean)
@@ -228,6 +230,7 @@ st_write(data[, c(1, 2, 3, 28)], 'index_capacity.gpkg',
 ```
 
 To make the results more interpretable, we can compute the contribution of the variables below. Note that Pregnancy, Nativity, Youth, Plumbing, No Computer, and Housing units are the variables with high contribution.
+
 
 ```{r}
 # Compute squared loadings
