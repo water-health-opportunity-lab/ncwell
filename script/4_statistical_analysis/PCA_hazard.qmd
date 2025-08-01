@@ -29,8 +29,8 @@ library("cluster")
 library("mclust")
 
 # read data
-data <- st_read('nc_grid_hazard_transformed.gpkg')
-data_capacity <- st_read('nc_grid_capacity_transformed.gpkg')
+data <- st_read('nc_grid_hazard_imputed.gpkg')
+data_capacity <- st_read('nc_grid_capacity_imputed.gpkg')
 
 # add block information
 block <- data_capacity %>%
@@ -197,8 +197,10 @@ bc <- boxcox(lmod)
 index <- (index - min(index)) / (max(index) - min(index))
 index <- index ^ (as.numeric(lambda))
 data$index <- index
-```
 
+st_write(data[, c(1, 2, 11, 13)], 'index_hazard.gpkg',
+         layer = "my_layer", driver = "GPKG", append = FALSE)
+```
 Let us tentatively use positive weights for those 5 PCs. To make the results more interpretable, we can compute the contribution of the variables below. Note that Satelite-based inundation map, Superfund, CAFOs, and FEMA Floodplain are the variables with high contribution.
 
 ```{r}
@@ -260,11 +262,11 @@ data$cluster <- as.numeric(as.character(data$cluster))
 
 ######## Validation plot
 custom_colors <- c(
-  "1" = "slateblue",
+  "1" = "darkblue",
   "2" = "royalblue",
   "3" = "deepskyblue",
   "4" = "paleturquoise1",
-  "5" = "seagreen1",
+  "5" = "palegreen",
   "6" = "rosybrown1",
   "7" = "palevioletred1",
   "8" = "indianred1",

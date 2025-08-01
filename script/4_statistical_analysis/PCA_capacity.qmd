@@ -29,7 +29,7 @@ library("cluster")
 library("mclust")
 
 # read data
-data <- st_read('nc_grid_capacity_transformed.gpkg')
+data <- st_read('nc_grid_capacity_imputed.gpkg')
 
 # total sample size
 (n <- nrow(data))
@@ -81,7 +81,8 @@ fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
   )
 ```
 
-In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 14% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
+In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 14.1% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
+
 
 Before constructing the index, let us first make sure the directionality of the variables is correct. To make the PCs more interpretable, we apply the varimax rotation to the loadings, which maximizes the variance of the loadings within each factor. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted.
 
@@ -111,42 +112,42 @@ PCs <- scaled_data %*% rot
 
 ## interpretation of the first 5 PCs
 # PC1 (increase the capacity) (urban, dense, well-developed)
-## poverty (-), pregnancy (-), housing units (+)
+## poverty (-), pregnancy (-), housing units (+), no computer (-)
 w1 <- round(rot[, 1], 2)
 w1[which(abs(w1) > 0.3)]
 
 # PC2 (increase the capacity) (young, has internet, educated, not poor)
-## poverty (-), education (-), seniors (-), internet (-)
+## nativity (+), pregnancy (+), plumbing (+), internet (-), no vehicle ownship (-)
 w2 <- round(rot[, 2], 2)
 w2[which(abs(w2) > 0.3)]
 
 # PC3 (positive effects on capacity) 
 ## (bike friently, access to computer, young, health insured)
-## health insurance (+), seniors (-), active commuting (+), computer (-)
+## health insurance (+), housing units, computer (-)
 w3 <- round(rot[, 3], 2)
 w3[which(abs(w3) > 0.3)]
 
 # PC4 (positive effects on capacity) 
 ## (not poor, US citizens, adult, with cars, access to internet)
-## poverty (-), nativity (+), youth (-), vehicle ownership (-), internet (-)
+## poverty (-), nativity (+), youth (-), vehicle ownership (-), internet (-), active computing (+)
 w4 <- round(rot[, 4], 2)
 w4[which(abs(w4) > 0.3)]
 
 # PC5 (positive effects on capacity) 
 ## stable resident, english profient, family, more young
-## geographical mobility (+), minority (-), 
-## single parent (-), seniors (-)
+## geographical mobility (+), government jobs (+), lack of english proficiency 
+## single parent (-), youth (-)
 w5 <- round(rot[, 5], 2)
 w5[which(abs(w5) > 0.3)]
 ```
 
 We can interpret those PCs in the following way. If a region has higher values of
 
-1.  PC1, it is more urban, dense, well-developed.
-2.  PC2, it has more economic and digital resources, higher education levels, and younger population.
-3.  PC3, it has more access to health services, younger and more mobile population, and greater digital inclusion.
-4.  PC4, it has more native population, more adults, digitally connected, mobile population (with cars).
-5.  PC5, it has more stable, English proficient, and younger residents, more of which are families.
+1.  PC1, it is more urban, dense, well-developed, and with access to computer.
+2.  PC2, it has more US-born population with more access to internet, plumbing and vehicle ownership but more pregnant women.
+3.  PC3, it has more access to health services, computer, and available housing.
+4.  PC4, it has more native and richer population, more adults, digitally connected, mobile population (with cars) with active commuting. It appears to capture more metropolitan areas
+5.  PC5, it has more stable employment in government jobs, less migration, fewer language, family, and age-based vulnerabilities
 
 To interpret this PC, let us visualize the content of the first two PCs in terms of their contribution. For variable $j$ and PC $k$, the contribution of variable $j$ is defined as
 
@@ -205,7 +206,8 @@ ggplot(df, aes(x = 0, y = 0)) +
        x = "Rotated PC1", y = "Rotated PC2", color = "Contribution")
 ```
 
-So, we can observe that Housing units, Seniors, Poverty status, and No internet are the contributing variables to the index of capacity module in terms of the first two PCs. Next, we visualize the raw distribution of the index, which turns out to be highly left-skewed. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
+So, we can observe that plumbing, pregnancy, and housing units are the contributing variables to the index of capacity module in terms of the first two PCs. Next, we visualize the raw distribution of the index, which turns out to be highly left-skewed. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
+
 
 ```{r}
 ## raw distribution of the index
@@ -222,9 +224,13 @@ bc <- boxcox(lmod)
 index <- (index - min(index)) / (max(index) - min(index))
 index <- index ^ (as.numeric(lambda))
 data$index <- index
+
+st_write(data[, c(1, 2, 3, 28)], 'index_capacity.gpkg',
+         layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
 
-To make the results more interpretable, we can compute the contribution of the variables below. Note that Poverty status, Lack of Geographical mobility, Minority, Seniors, No Internet, No Computer, and Housing units are the variables with high contribution.
+To make the results more interpretable, we can compute the contribution of the variables below. Note that Pregnancy, Nativity, Youth, Plumbing, No Computer, and Housing units are the variables with high contribution.
+
 
 ```{r}
 # Compute squared loadings
@@ -238,7 +244,7 @@ contrib <- sweep(squared_loadings, 2,
 # View contribution
 cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
 print(cont)
-cont[which(cont > 25)]
+cont[which(cont > 30)]
 ```
 
 It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
@@ -285,14 +291,15 @@ data$cluster <- as.numeric(as.character(data$cluster))
 
 ######## Validation plot
 custom_colors <- c(
-  "1" = "slateblue",
+  "1" = "darkblue",
   "2" = "royalblue",
   "3" = "deepskyblue",
   "4" = "paleturquoise1",
-  "5" = "rosybrown1",
-  "6" = "palevioletred1",
-  "7" = "indianred1",
-  "8" = "darkred"
+  "5" = "palegreen",
+  "6" = "rosybrown1",
+  "7" = "palevioletred1",
+  "8" = "indianred1",
+  "9" = "darkred"
 )
 
 library(leaflet)
