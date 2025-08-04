@@ -460,6 +460,9 @@ names(vifs) <- c('Satelite-based inundation map',
                  'Agricultural Runoff')
 print(round(vifs, 2))
 
+# Impute ag_runoff (1 missing value)
+data$ag_runoff[is.na(data$ag_runoff) == TRUE] <- median(data$ag_runoff, na.rm = TRUE)
+
 st_write(data, "nc_grid_hazard_transformed.gpkg", 
          layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
