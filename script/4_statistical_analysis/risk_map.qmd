@@ -2115,16 +2115,16 @@ In this section, we provide the detailed descriptions of the variables in hazard
 
 The spatial resolution, time period, and data source of the variables in the hazard module are listed below.
 
-| Predictor Group                            | Spatial Resolution | Time Period | Data Source                                                                   |
-|-----------------|-----------------|-----------------|----------------------|
-| Satellite-Based Inundation Map             | 1/8 degree         | 2024        | Global Flood Monitoring System (GFMS), [flood.umd.edu](https://flood.umd.edu) |
-| Superfund Sites                            | Facility-Level     | 2025        | EPA Superfund Enterprise Management System (SEMS)                             |
-| CAFOs (Concentrated Animal Feeding Ops)    | Facility-Level     | 1998--2024  | NCDEQ Animal Feed Operation Permits Facility Map                              |
-| EPA TRI Water Impact                       | Facility-Level     | 2019--2023  | EPA Toxics Release Inventory                                                  |
-| EPA TRI Total Impact                       | Facility-Level     | 2019--2023  | EPA Toxics Release Inventory                                                  |
-| Onsite Wastewater Treatment Systems (OWTS) | Facility-Level     | 1993--2025  | NCDEQ NPDES Wastewater Discharge Permits                                      |
-| Estimated Agricultural Runoff              | 10m                | 2024        | USDA Land Use / Cropland Data Layer                                           |
-| FEMA Floodplain                            | 20--30m            | 2025        | Flood Risk Info System (FRIS), NC Digital Flood Insurance Rate Map (DFIRM)    |
+| Predictor Group | Spatial Resolution | Time Period | Data Source |
+|----|----|----|----|
+| Satellite-Based Inundation Map | 1/8 degree | 2024 | Global Flood Monitoring System (GFMS), [flood.umd.edu](https://flood.umd.edu) |
+| Superfund Sites | Facility-Level | 2025 | EPA Superfund Enterprise Management System (SEMS) |
+| CAFOs (Concentrated Animal Feeding Ops) | Facility-Level | 1998--2024 | NCDEQ Animal Feed Operation Permits Facility Map |
+| EPA TRI Water Impact | Facility-Level | 2019--2023 | EPA Toxics Release Inventory |
+| EPA TRI Total Impact | Facility-Level | 2019--2023 | EPA Toxics Release Inventory |
+| Onsite Wastewater Treatment Systems (OWTS) | Facility-Level | 1993--2025 | NCDEQ NPDES Wastewater Discharge Permits |
+| Estimated Agricultural Runoff | 10m | 2024 | USDA Land Use / Cropland Data Layer |
+| FEMA Floodplain | 20--30m | 2025 | Flood Risk Info System (FRIS), NC Digital Flood Insurance Rate Map (DFIRM) |
 
 : **Table A2. Hazard predictors used in the Hazard Module.**
 
@@ -2178,100 +2178,100 @@ We separate the descriptions of the variables into multiple groups, shown as fol
 
 #### I. Well Use
 
-| Variable Name | Definition                                                   | Unit | Source        | Spatial Scale      | Year |
-|------------|------------|------------|------------|------------|------------|
-| Pct_Wells     | Binary designation (0 or 100%) of public or private well use | \%   | Murray et al. | Census block group | 2023 |
+| Variable Name | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| Pct_Wells | Binary designation (0 or 100%) of public or private well use | \% | Murray et al. | Census block group | 2023 |
 
 ------------------------------------------------------------------------
 
 #### II. Geology
 
-| Variable Name | Definition                                 | Unit        | Source                     | Spatial Scale | Year |
-|------------|------------|------------|------------|------------|------------|
-| bedrock       | Bedrock rock type                          | Categorical | King & Beikman             | Polygon       | 1974 |
-| lith          | Lithologic classification                  | Categorical | Anning & Schweitzer (USGS) | Polygon       | 2017 |
-| surfgeo       | Surficial geology                          | Categorical | Soller et al.              | Polygon       | 2009 |
-| drainage      | Estimated extent of subsurface tile drains | m²          | USGS                       | 30m           | 2012 |
+| Variable Name | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| bedrock | Bedrock rock type | Categorical | King & Beikman | Polygon | 1974 |
+| lith | Lithologic classification | Categorical | Anning & Schweitzer (USGS) | Polygon | 2017 |
+| surfgeo | Surficial geology | Categorical | Soller et al. | Polygon | 2009 |
+| drainage | Estimated extent of subsurface tile drains | m² | USGS | 30m | 2012 |
 
 ------------------------------------------------------------------------
 
 #### III. Groundwater
 
-| Variable Name         | Definition                                                 | Unit        | Source                | Spatial Scale | Year                 |
-|------------|------------|------------|------------|------------|------------|
-| aq_rocktype           | Aquifer rock type                                          | Categorical | USGS                  | Polygon       | 2003                 |
-| Groundwater variables | Depth to water, transmissivity, water content, travel time | Multiple    | Zell & Sanford (USGS) | 250m          | 2020                 |
-| NO3 (multiple)        | Groundwater nitrate at domestic/public well depths         | mg/L        | Ransom et al.         | 1km           | 1988--2018 (modeled) |
+| Variable Name | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| aq_rocktype | Aquifer rock type | Categorical | USGS | Polygon | 2003 |
+| Groundwater variables | Depth to water, transmissivity, water content, travel time | Multiple | Zell & Sanford (USGS) | 250m | 2020 |
+| NO3 (multiple) | Groundwater nitrate at domestic/public well depths | mg/L | Ransom et al. | 1km | 1988--2018 (modeled) |
 
 ------------------------------------------------------------------------
 
 #### IV. Hydroclimate
 
-| Variable Name / Group  | Definition                                         | Unit          | Source                     | Spatial Scale  | Year       |
-|------------|------------|------------|------------|------------|------------|
-| Base Flow (bfi)        | Base flow index and estimated mean discharge       | \% or mm/yr   | Wolock et al. (USGS)       | 1km            | 1951--1980 |
-| rech                   | Estimated mean annual natural groundwater recharge | mm/yr         | Wolock et al. (USGS)       | 1km            | 1951--1980 |
-| Water Budget Variables | Effective recharge, evapotranspiration, quick-flow | mm/yr or m/yr | Reitz et al. (2017)        | 800m           | 2000--2013 |
-| tmean                  | 30-year normal mean temperature                    | Celsius       | PRISM Climate Group (2021) | 800m           | 1991--2020 |
-| ppt                    | 30-year normal mean precipitation                  | mm            | PRISM Climate Group (2021) | 800m           | 1991--2020 |
-| HUC_12                 | HUC-12 watershed code                              | Code          | EPA EnviroAtlas            | Polygon        | 2025       |
-| stm_den                | Stream density                                     | km/km²        | EPA EnviroAtlas            | HUC-12 Polygon | 2015       |
+| Variable Name / Group | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| Base Flow (bfi) | Base flow index and estimated mean discharge | \% or mm/yr | Wolock et al. (USGS) | 1km | 1951--1980 |
+| rech | Estimated mean annual natural groundwater recharge | mm/yr | Wolock et al. (USGS) | 1km | 1951--1980 |
+| Water Budget Variables | Effective recharge, evapotranspiration, quick-flow | mm/yr or m/yr | Reitz et al. (2017) | 800m | 2000--2013 |
+| tmean | 30-year normal mean temperature | Celsius | PRISM Climate Group (2021) | 800m | 1991--2020 |
+| ppt | 30-year normal mean precipitation | mm | PRISM Climate Group (2021) | 800m | 1991--2020 |
+| HUC_12 | HUC-12 watershed code | Code | EPA EnviroAtlas | Polygon | 2025 |
+| stm_den | Stream density | km/km² | EPA EnviroAtlas | HUC-12 Polygon | 2015 |
 
 ------------------------------------------------------------------------
 
 #### V. Landscape
 
-| Variable Name              | Definition                                         | Unit        | Source      | Spatial Scale  | Year |
-|------------|------------|------------|------------|------------|------------|
-| Landscape Cover (multiple) | \% cover of land types (e.g., croplands, wetlands) | \%          | EnviroAtlas | HUC-12 Polygon | 2025 |
-| Avg_Buff_Width             | Avg. width of stream buffers downstream from ag.   | Meters      | EnviroAtlas | HUC-12 Polygon | 2025 |
-| landcover                  | 16-category national land cover database           | Categorical | NLCD        | 30m            | 2019 |
-| landuse                    | Land use stratification class                      | Categorical | USDA        | Polygon        | 2015 |
-| elevation                  | Elevation                                          | Meters      | USGS        | 1m             | 2024 |
+| Variable Name | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| Landscape Cover (multiple) | \% cover of land types (e.g., croplands, wetlands) | \% | EnviroAtlas | HUC-12 Polygon | 2025 |
+| Avg_Buff_Width | Avg. width of stream buffers downstream from ag. | Meters | EnviroAtlas | HUC-12 Polygon | 2025 |
+| landcover | 16-category national land cover database | Categorical | NLCD | 30m | 2019 |
+| landuse | Land use stratification class | Categorical | USDA | Polygon | 2015 |
+| elevation | Elevation | Meters | USGS | 1m | 2024 |
 
 ------------------------------------------------------------------------
 
 #### VI. Soil Geochemistry
 
-| Variable Name     | Definition                            | Unit  | Source              | Spatial Scale | Year       |
-|------------|------------|------------|------------|------------|------------|
-| Soil Geochemistry | Chemical quantities in soil A horizon | mg/kg | Smith et al. (USGS) | 40km          | 2007--2010 |
+| Variable Name | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| Soil Geochemistry | Chemical quantities in soil A horizon | mg/kg | Smith et al. (USGS) | 40km | 2007--2010 |
 
 ------------------------------------------------------------------------
 
 #### VII. Soil Properties
 
-| Variable Name / Group      | Definition                                  | Unit     | Source                            | Spatial Scale | Year |
-|------------|------------|------------|------------|------------|------------|
-| Soil Properties (multiple) | Soil composition, pH, K factor, depth, etc. | Multiple | Walkinshaw et al. (UCDavis, USGS) | 800m          | 2020 |
-| Soil Properties (multiple) | T factor, permeability, water capacity      | Multiple | Wolock et al. (USGS, STATSGO)     | 1km           | 1997 |
+| Variable Name / Group | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| Soil Properties (multiple) | Soil composition, pH, K factor, depth, etc. | Multiple | Walkinshaw et al. (UCDavis, USGS) | 800m | 2020 |
+| Soil Properties (multiple) | T factor, permeability, water capacity | Multiple | Wolock et al. (USGS, STATSGO) | 1km | 1997 |
 
 ### Capacity Module
 
-| Variable Name         | Definition                                                 | Unit      | Source | Spatial Scale | Year |
-|------------|------------|------------|------------|------------|------------|
-| pct_minority          | \% of minorities (non-White)                               | \%        | ACS    | Block group   | 2023 |
-| pct_limited_english   | \% of limited English speakers                             | \%        | ACS    | Block group   | 2023 |
-| pct_single_parent     | \% of single-parent households (no spouse, children \< 18) | \%        | ACS    | Block group   | 2023 |
-| pct_unemployed        | Unemployment rate                                          | \%        | ACS    | Block group   | 2023 |
-| pct_no_college        | \% with no post-secondary education (college)              | \%        | ACS    | Block group   | 2023 |
-| pct_poverty           | \% living below 150% of the poverty threshold              | \%        | ACS    | Census tract  | 2023 |
-| pct_women             | \% of women                                                | \%        | ACS    | Block group   | 2023 |
-| pct_over_65           | \% of people \> 65 years old                               | \%        | ACS    | Block group   | 2023 |
-| pct_under_17          | \% of people \< 17 years old                               | \%        | ACS    | Block group   | 2023 |
-| pct_women_gave_birth  | \% of women who had a birth in the past 12 months          | \%        | ACS    | Census tract  | 2023 |
-| pct_insured           | \% insured in the total civilian noninstitutionalized pop. | \%        | ACS    | Census tract  | 2023 |
-| pct_us_born           | \% of population born in the U.S.                          | \%        | ACS    | Census tract  | 2023 |
-| pct_owner_occupied    | \% of owner-occupied households                            | \%        | ACS    | Block group   | 2023 |
-| pct_active_commuting  | \% commuting by transit, walking, or cycling (age ≥ 16)    | \%        | ACS    | Block group   | 2023 |
-| pct_no_move           | \% living in same house as 1 year ago                      | \%        | ACS    | Census tract  | 2023 |
-| pct_gov_workers       | \% of workers ≥ 16 y who are government workers            | \%        | ACS    | Census tract  | 2023 |
-| pct_crowded_housing   | \% of households with \> 1 occupant per room               | \%        | ACS    | Block group   | 2023 |
-| pct_plumbing          | \% of households with complete plumbing                    | \%        | ACS    | Block group   | 2023 |
-| pct_new_home          | \% built after 2008 (rounded to 2010)                      | \%        | ACS    | Block group   | 2023 |
-| pct_no_vehicle        | \% of households without a motor vehicle                   | \%        | ACS    | Block group   | 2023 |
-| pct_no_internet       | \% of households without internet                          | \%        | ACS    | Block group   | 2023 |
-| housing_units_density | Housing units per km²                                      | units/km² | ACS    | Block group   | 2023 |
+| Variable Name | Definition | Unit | Source | Spatial Scale | Year |
+|----|----|----|----|----|----|
+| pct_minority | \% of minorities (non-White) | \% | ACS | Block group | 2023 |
+| pct_limited_english | \% of limited English speakers | \% | ACS | Block group | 2023 |
+| pct_single_parent | \% of single-parent households (no spouse, children \< 18) | \% | ACS | Block group | 2023 |
+| pct_unemployed | Unemployment rate | \% | ACS | Block group | 2023 |
+| pct_no_college | \% with no post-secondary education (college) | \% | ACS | Block group | 2023 |
+| pct_poverty | \% living below 150% of the poverty threshold | \% | ACS | Census tract | 2023 |
+| pct_women | \% of women | \% | ACS | Block group | 2023 |
+| pct_over_65 | \% of people \> 65 years old | \% | ACS | Block group | 2023 |
+| pct_under_17 | \% of people \< 17 years old | \% | ACS | Block group | 2023 |
+| pct_women_gave_birth | \% of women who had a birth in the past 12 months | \% | ACS | Census tract | 2023 |
+| pct_insured | \% insured in the total civilian noninstitutionalized pop. | \% | ACS | Census tract | 2023 |
+| pct_us_born | \% of population born in the U.S. | \% | ACS | Census tract | 2023 |
+| pct_owner_occupied | \% of owner-occupied households | \% | ACS | Block group | 2023 |
+| pct_active_commuting | \% commuting by transit, walking, or cycling (age ≥ 16) | \% | ACS | Block group | 2023 |
+| pct_no_move | \% living in same house as 1 year ago | \% | ACS | Census tract | 2023 |
+| pct_gov_workers | \% of workers ≥ 16 y who are government workers | \% | ACS | Census tract | 2023 |
+| pct_crowded_housing | \% of households with \> 1 occupant per room | \% | ACS | Block group | 2023 |
+| pct_plumbing | \% of households with complete plumbing | \% | ACS | Block group | 2023 |
+| pct_new_home | \% built after 2008 (rounded to 2010) | \% | ACS | Block group | 2023 |
+| pct_no_vehicle | \% of households without a motor vehicle | \% | ACS | Block group | 2023 |
+| pct_no_internet | \% of households without internet | \% | ACS | Block group | 2023 |
+| housing_units_density | Housing units per km² | units/km² | ACS | Block group | 2023 |
 
 : **Table A1. Input variables used in the Capacity Module.**
 
