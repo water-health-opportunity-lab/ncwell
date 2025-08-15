@@ -36,7 +36,7 @@ library(rpart.plot)
 library(smotefamily)
 ```
 
-```{r}
+```{r, include=FALSE}
 # Read files
 risk <- st_read("nc_grid_index.gpkg")
 
@@ -48,20 +48,48 @@ microbio_data_hurricane <- read.csv("ecoli_coords_hurricane.csv", strip.white = 
 microbio_data_microbiology <- read.csv("ecoli_coords_microbio.csv", strip.white = TRUE)
 ```
 
-```{r}
+```{r collapse = TRUE}
 # Join NCDHHS and risk index for microbio_data_hurricane
 microbio_sf_hurricane <- st_as_sf(microbio_data_hurricane, coords = c("Longitude", "Latitude"), crs = 4326)
 microbio_proj_hurricane <- st_transform(microbio_sf_hurricane, st_crs(risk))
+
 microbio_with_risk_hurricane <- st_join(microbio_proj_hurricane, risk, join = st_within) %>%
+  # Filter out empty results
   filter(!is.na(risk)) %>%
   filter(!Ecoli_Result %in% c("Not Tested", ""))
+
+nrow(microbio_with_risk_hurricane)
+
+microbio_with_risk_hurricane$Date_Collected <- mdy(microbio_with_risk_hurricane$Date_Collected)
+microbio_with_risk_hurricane <- microbio_with_risk_hurricane %>%
+  # Filter out tests from the same sampling site, only keeping the oldest sample
+  group_by(Street_Address) %>%
+  arrange(Date_Collected) %>%
+  slice(1) %>%
+  ungroup()
+
+nrow(microbio_with_risk_hurricane)
 
 # Join NCDHHS and risk index for microbio_data_microbiology
 microbio_sf_microbiology <- st_as_sf(microbio_data_microbiology, coords = c("Longitude", "Latitude"), crs = 4326)
 microbio_proj_microbiology <- st_transform(microbio_sf_microbiology, st_crs(risk))
+
 microbio_with_risk_microbiology <- st_join(microbio_proj_microbiology, risk, join = st_within) %>%
+  # Filter out empty results
   filter(!is.na(risk)) %>%
-  filter(!Ecoli_Result %in% c("Not Tested", ""))
+  filter(!Ecoli_Result %in% c("Not Tested", "")) 
+
+nrow(microbio_with_risk_microbiology)
+
+microbio_with_risk_microbiology$Date_Collected <- mdy(microbio_with_risk_microbiology$Date_Collected)
+microbio_with_risk_microbiology <- microbio_with_risk_microbiology %>%
+  # Filter out tests from the same sampling site, only keeping the oldest sample
+  group_by(Street_Address) %>%
+  arrange(Date_Collected) %>%
+  slice(1) %>%
+  ungroup()
+
+nrow(microbio_with_risk_microbiology)
 ```
 
 Some of the addresses were not fully reported (i.e. only street or road names were included in the NCDHHS report) and this was reflected after geocoding. However, we will proceed without filtering out testing locations with a geocoding accuracy score of less than 0.8 (as per the Geocod.io documentation) due to the 1 km x 1 km resolution of the risk index.
@@ -70,26 +98,26 @@ Some of the addresses were not fully reported (i.e. only street or road names we
 
 The plot of sampling sites below shows that the samples tested during the [Hurricane Helene testing program](https://celr.dph.ncdhhs.gov/hurricaneHelene) (shown in [**purple**]{style="color:purple;"}) were primarily collected in western counties of North Carolina. Meanwhile, the samples collected as part of the general microbiology testing program (shown in [**orange**]{style="color:orange;"}) are distributed across all of North Carolina.
 
-The table of sampling frequencies reveals that Orange County, Alamance County, and Chatham County have the largest sample sizes.
-
 ```{r}
 # Plot locations of well sampling sites
 plot(st_geometry(risk), col = 'lightblue', border = NA)
 plot(st_geometry(microbio_proj_microbiology), col = 'orange', add = TRUE)
 plot(st_geometry(microbio_proj_hurricane), col = 'purple', add = TRUE)
-
-# Sort by counties with most samples
-sort(table(microbio_with_risk$System_Name), decreasing = TRUE)
 ```
 
 ### 1.3 Merge `microbio_with_risk_hurricane` and `microbio_with_risk_microbiology`
 
 Samples that were repeated in both `microbio_with_risk_hurricane` and `microbio_with_risk_microbiology` were filtered so there was only one occurrence in the overall `microbio_with_risk` dataset.
 
-```{r}
+The table of sampling frequencies reveals that Orange County, Alamance County, and Chatham County have the largest sample sizes.
+
+```{r collapse = TRUE}
 # Combine raw datasets and remove out duplicates
 microbio_with_risk <- rbind(microbio_with_risk_hurricane, microbio_with_risk_microbiology) %>%
   filter(!duplicated(StarLiMS_ID))
+
+# Sort by counties with most samples
+sort(table(microbio_with_risk$System_Name), decreasing = TRUE)
 ```
 
 We observe:
@@ -104,7 +132,7 @@ We observe:
 
 There is a major class imbalance between uncontaminated and contaminated samples which will be addressed via permutation tests and SMOTE.
 
-```{r}
+```{r collapse = TRUE}
 # Check for the values included in Ecoli_Result and Total_Coliform_Result
 table(microbio_with_risk_hurricane$Ecoli_Result)
 table(microbio_with_risk_microbiology$Ecoli_Result)
@@ -130,7 +158,7 @@ There were 522 samples specific to Hurricane Helene testing programs and 6770 sa
 
 In total, there are 6751 binary testing results and 68 continuous testing results.
 
-```{r}
+```{r collapse = TRUE}
 # Number of hurricane tests
 length(microbio_with_risk_hurricane$System_Name)
 # Number of microbiology tests
@@ -195,17 +223,22 @@ counties <- c("ALEXANDER CO ENVIRONMENTAL HEALTH",
               "WILKES CO ENVIRONMENTAL HEALTH", 
               "YANCEY COUNTY ENVIROMENTAL HEALTH")
 
-microbio_pooled_affected <- rbind(microbio_pooled_hurricane, microbio_pooled_microbiology_affected) %>%
+microbio_pooled_affected <- rbind(microbio_pooled_hurricane, microbio_pooled_microbiology) %>%
   filter(!duplicated(StarLiMS_ID)) %>%
   filter(System_Name %in% counties)
 ```
 
-Compare risk indices of western counties to the rest of North Carolina
+There is a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.4901e-05), with samples from the western counties having a mean risk of 0.181 and non-western counties having a mean risk of 0.175.
 
 ```{r}
+microbio_pooled <- microbio_pooled %>% mutate(Is_Western = System_Name %in% counties)
 
+summary(microbio_pooled$risk[microbio_pooled$Is_Western == TRUE])
+summary(microbio_pooled$risk[microbio_pooled$Is_Western == FALSE])
+
+wilcox.test(microbio_pooled$risk ~ microbio_pooled$Is_Western,
+            alternative = "less")
 ```
-
 
 ### 1.4 Percentage of contaminated samples per week
 
@@ -217,8 +250,8 @@ For Hurricane Helene testing, the smoothed curve shows that the proportion of co
 
 The sample size per week decreased over time, likely due to decreased interest in testing after the impacts of Hurricane Helen subsided.
 
-```{r}
-microbio_pooled_hurricane$Date_Collected <- mdy(microbio_pooled_hurricane$Date_Collected)
+```{r, fig.show="hold", out.width="30%"}
+# microbio_pooled_hurricane$Date_Collected <- mdy(microbio_pooled_hurricane$Date_Collected)
 microbio_weekly_summary_hurricane <- microbio_pooled_hurricane %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
   group_by(week) %>%
@@ -246,8 +279,8 @@ ggplot(microbio_weekly_summary_hurricane, aes(x = week, y = n)) +
 
 For general microbiology testing, the smoothed curve shows that the proportion of contaminated samples for both E. coli and Total Coliform testing reached the lowest point around the beginning of March.
 
-```{r}
-microbio_pooled_microbiology$Date_Collected <- mdy(microbio_pooled_microbiology$Date_Collected)
+```{r, fig.show="hold", out.width="30%"}
+# microbio_pooled_microbiology$Date_Collected <- mdy(microbio_pooled_microbiology$Date_Collected)
 microbio_weekly_summary_microbiology <- microbio_pooled_microbiology %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
   group_by(week) %>%
@@ -275,8 +308,8 @@ ggplot(microbio_weekly_summary_microbiology, aes(x = week, y = n)) +
 
 When results for both testing programs are combined, the proportion of contaminated E. coli samples reached the lowest point in mid-February, whereas the proportion of contaminated Total Coliform samples reached the lowest point in early March.
 
-```{r}
-microbio_pooled$Date_Collected <- mdy(microbio_pooled$Date_Collected)
+```{r, fig.show="hold", out.width="30%"}
+# microbio_pooled$Date_Collected <- mdy(microbio_pooled$Date_Collected)
 microbio_weekly_summary_pooled <- microbio_pooled %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
   group_by(week) %>%
@@ -304,8 +337,8 @@ ggplot(microbio_weekly_summary_pooled, aes(x = week, y = n)) +
 
 When results for both testing programs are combined and only the western counties listed [here](https://pubs.acs.org/doi/10.1021/acs.estlett.5c00503) are considered, the proportion of contaminated E. coli samples reached the lowest point in mid-February, whereas the proportion of contaminated Total Coliform samples reached the lowest point in early March.
 
-```{r}
-microbio_pooled_affected$Date_Collected <- mdy(microbio_pooled_affected$Date_Collected)
+```{r, fig.show="hold", out.width="30%"}
+# microbio_pooled_affected$Date_Collected <- mdy(microbio_pooled_affected$Date_Collected)
 microbio_weekly_summary <- microbio_pooled_affected %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
   group_by(week) %>%
@@ -331,21 +364,21 @@ ggplot(microbio_weekly_summary, aes(x = week, y = n)) +
 
 ### 1.5 Filter dates to effective time period (9/25/24 - 3/1/25)
 
-After filtering the dates to the effective time period, there were 3433 samples in `microbio_pooled_filtered` (all locations) and 874 samples for `microbio_pooled_affected_filtered` (western counties).
+After filtering the dates to the effective time period, there were 3163 samples in `microbio_pooled_filtered` (all locations) and 806 samples for `microbio_pooled_affected_filtered` (western counties).
 
 We observe:
 
--   3350 uncontaminated and 83 contaminated E. coli samples in `microbio_pooled_filtered`
+-   3097 uncontaminated and 66 contaminated E. coli samples in `microbio_pooled_filtered`
 
--   839 uncontaminated and 33 contaminated E. coli samples in `microbio_pooled_affected_filtered`
+-   778 uncontaminated and 28 contaminated E. coli samples in `microbio_pooled_affected_filtered`
 
--   2470 uncontaminated and 963 contaminated Total Coliform samples in `microbio_pooled_filtered`
+-   2333 uncontaminated and 830 contaminated Total Coliform samples in `microbio_pooled_filtered`
 
--   603 uncontaminated and 269 contaminated Total Coliform samples in `microbio_pooled_affected_filtered`.
+-   573 uncontaminated and 233 contaminated Total Coliform samples in `microbio_pooled_affected_filtered`.
 
 Downstream analysis will be performed using `microbio_pooled_affected_filtered`.
 
-```{r}
+```{r collapse = TRUE}
 start_date <- '2024-09-25'
 end_date <- '2025-03-01'
 
