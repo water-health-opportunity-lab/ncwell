@@ -1,0 +1,350 @@
+---
+title: "Validation"
+format: html
+toc: true
+editor: visual
+code-fold: true
+warning: false 
+message: false
+self-contained: true
+tabset: true
+---
+
+
+```{r, warning=FALSE,echo=FALSE,message=FALSE,results='hide'}
+# Load packages
+library("sf")
+library("dplyr")
+library("ggplot2")
+library("ROCit")
+library("cutpointr")
+library("smotefamily")
+library("pROC")
+library('mgcv')
+
+# Read files
+risk <- st_read("nc_grid_index.gpkg")
+
+risk_capacity <- st_read("index_capacity.gpkg")
+risk_hazard <- st_read("index_hazard.gpkg")
+risk_vulnerability <- st_read("index_vulnerability.gpkg")
+
+ecoli_data <- read.csv("ecoli_coords.csv")
+
+# Join NCDHHS and risk index
+ecoli_sf <- st_as_sf(ecoli_data, coords = c("Longitude", "Latitude"), crs = 4326)
+ecoli_proj <- st_transform(ecoli_sf, st_crs(risk))
+ecoli_with_risk <- st_join(ecoli_proj, risk, join = st_within)
+
+ecoli_binary <- ecoli_with_risk %>%
+  mutate(Ecoli_Result_Binary = ifelse(trimws(Ecoli_Result) == "<1", "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(trimws(Total_Coliform_Result) == "<1", "Absent", "Present"))
+
+### keep the observations with available risk scores
+subset <- ecoli_binary[which(is.na(ecoli_binary$risk) == FALSE), ]
+subset <- subset %>% mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result_Binary == "Absent", 0, 1)) %>%
+  mutate(Coliform_Result_Binary = ifelse(Coliform_Result_Binary == "Absent", 0, 1))
+```
+
+In this document, we try to tackle the unbalanced issue of contaminated wells and uncontaminated wells from two perspective. First, we try to use permutation test, which is more robust to unbalanced sample sizes. Second, we try to duplicate the "unbalanced" group. To fresh the memory, the exact imbalance for contamination of E.Coli and Coliform is shown as below.
+
+```{r}
+with(subset, table(Ecoli_Result_Binary))
+with(subset, table(Coliform_Result_Binary))
+```
+
+
+
+# Approach I: Permutation test
+
+A permutation test is a type of nonparametric hypothesis test that evaluates whether the observed effect could have happened by chance. Instead of relying on theoretical distributions, it builds the null distribution by repeatedly reshuffling the group assignments. Permutation test can make the test more robust to the violation of assumptions in the presence of imbalanced design. However, permutation test still suffers from the loss of statistical power due to the imbalance. 
+
+## Wilcoxon rank-sum test (without Permutation test)
+
+In terms of contamination with E.Coli, we compare the original Wilcoxon rank-sum test for the risk score between contaminated wells and uncontaminated wells, with the permutation test. As we may observe, we get similar testing results but the permutation test is sligtly more sensitive to the signal in the data.
+
+```{r}
+with(subset, wilcox.test(x = risk[which(Ecoli_Result_Binary == 1)],
+                    y = risk[which(Ecoli_Result_Binary == 0)]))
+## permutation test
+perm.ht.mean <- function(x, group, B = 5000, seed = 123) {
+  # set a random seed
+  set.seed(seed)
+  
+  # sample size
+  n <- length(x)
+  n1 <- table(group)[1]
+  
+  # observed test statistics
+  T.obs <- wilcox.test(x = x[which(group == 1)],
+                       y = x[which(group == 0)])$statistic
+  T.perm <- c()
+  
+  # permutation
+  for (b in 1:B) {
+    idx <- sample(1:n)
+    T.perm[b] <- wilcox.test(x = x[which(group[idx] == 1)],
+                             y = x[which(group[idx] == 0)])$statistic
+  }
+  
+  # p-value
+  p.perm <- mean(abs(T.perm) >= abs(T.obs))
+  return(p.perm)
+}
+
+## permutation test for sample mean (Ecoli)
+with(subset, perm.ht.mean(x = risk, group = Ecoli_Result_Binary))
+```
+
+In terms of contamination with Coliform, we compare the original Wilcoxon rank-sum test for the risk score between contaminated wells and uncontaminated wells, with the permutation test. Similarly, we get comparable p-values and the permutation test is more sensitive to the signal. 
+
+```{r}
+## original test (Coliform)
+with(subset, wilcox.test(x = risk[which(Coliform_Result_Binary == 1)],
+                    y = risk[which(Coliform_Result_Binary == 0)]))
+
+## permutation test (Coliform)
+with(subset, perm.ht.mean(x = risk, group = Coliform_Result_Binary))
+```
+
+
+## Logistic regression (without Permutation test)
+
+In this section, we compare the tests between ordinary likelihood ratio test (LRT) (default in \texttt{glm}) and permutation test.
+
+### Risk score as a single covariate
+
+For this test, the null hypothesis is that the risk score does not relate to the risk of contamination risk. First, we present the results for E.Coli below. Similarly, the testing results of LRT test and the permutation test are similar. 
+
+```{r}
+## permutation test for logistic regression
+perm.ht.logit <- function(y, x, B = 5000, seed = 123) {
+  # set a random seed
+  set.seed(seed)
+  
+  # sample size
+  n <- length(y)
+  p <- ncol(x)
+  
+  mod <- glm(y ~ x, family = "binomial")
+  T.obs <- coef(summary(mod))[-1, 'z value']
+  T.perm <- matrix(NA, nrow = B, ncol = p)
+  
+  for (b in 1:B) {
+    y.perm <- sample(y)
+    mod.perm <- glm(y.perm ~ x, family = binomial)
+    T.perm[b, ] <- summary(mod.perm)$coef[-1, "z value"]
+  }
+  
+  ps <- numeric(p)
+  for (j in 1:p) {
+    ps[j] <- mean(abs(T.perm[, j]) >= abs(T.obs[j]))
+  }
+  
+  return(ps)
+}
+
+## logistic regression
+mod <- glm(Ecoli_Result_Binary ~ risk, data = subset, family = "binomial")
+summary(mod)
+
+## permutation test for logistic regression
+with(subset, perm.ht.logit(y = Ecoli_Result_Binary, 
+                           x = matrix(risk)))
+```
+
+Second, we present the results for the Coliform. We observe similar testing results of LRT test and the permutation test are similar. 
+
+```{r}
+## logistic regression
+mod <- glm(Coliform_Result_Binary ~ risk, data = subset, family = "binomial")
+summary(mod)
+
+## permutation test for logistic regression
+with(subset, perm.ht.logit(y = Coliform_Result_Binary, 
+                           x = matrix(risk)))
+```
+
+### Covariates: three indices for capacity, hazard, and vulnerability
+
+For this test, the null hypothesis is that the risk score does not relate to one of the index given the presence of other indices. To control for multiple predictors, we use Freedman–Lane permutation test, which permutes the residuals of the smaller model. 
+
+First, we present the results for E.Coli below. The three p-values of the permutation test correspond to the index of vulnerability, hazard, and capacity, respectively. The testing results of LRT test and the permutation test are similar though the latter appears more conservative. 
+
+```{r}
+perm.ht.logit.FL <- function(y, x, B = 5000, seed = 123) {
+  
+  ## Freedman–Lane permutation test
+  
+  # set a random seed
+  set.seed(seed)
+  
+  # sample size
+  n <- length(y)
+  p <- ncol(x)
+  
+  # full model
+  mod <- glm(y ~ x, family = "binomial")
+  ps <- c()
+  
+  for (j in 1:p) {
+    
+    ## Observed statistic
+    T.obs <- summary(mod)$coef[j + 1, "z value"]
+    
+    ## reduced models
+    if (p == 1) {
+      mod.j <- glm(y ~ 1, family = "binomial")
+    } else {
+      mod.j <- glm(y ~ x[, - j], family = "binomial")
+    }
+    
+    # Extract fitted values (logit scale) from reduced model
+    fv.j <- predict(mod.j, type = "link")
+    resid.j <- residuals(mod.j, type = "deviance")
+    
+    T.perm <- c()
+    
+    for (b in 1:B) {
+      
+      # Permute residuals
+      resid.perm <- sample(resid.j)
+      fv.perm <- fv.j + resid.perm
+      
+      # Convert back to probabilities
+      p.perm <- 1 / (1 + exp(-fv.perm))
+      
+      # Generate new binary outcome from these probabilities
+      y.perm <- rbinom(n, 1, p.perm)
+      
+      # Fit full model to permuted data and store z-value for x
+      mod.perm <- glm(y.perm ~ x, family = "binomial")
+      T.perm[b] <- summary(mod.perm)$coef[j, "z value"]
+    }
+    
+    ## p-value
+    ps[j] <- mean(abs(T.perm) >= abs(T.obs))
+  }
+  return(ps)
+}
+
+mod <- glm(Ecoli_Result_Binary ~ index_vulnerability + index_hazard + index_capacity,
+           data = subset, family = 'binomial')
+summary(mod)
+with(subset, perm.ht.logit.FL(y = Ecoli_Result_Binary, x = cbind(index_vulnerability,
+                                                                 index_hazard,
+                                                                 index_capacity)))
+```
+
+Second, we present the results for Coliform below. Similarly, the testing results of LRT test and the permutation test are similar though the latter appears more conservative. 
+
+```{r}
+mod <- glm(Coliform_Result_Binary ~ index_vulnerability + index_hazard + index_capacity,
+           data = subset, family = 'binomial')
+summary(mod)
+with(subset, perm.ht.logit.FL(y = Coliform_Result_Binary, x = cbind(index_vulnerability,
+                                                                 index_hazard,
+                                                                 index_capacity)))
+```
+
+
+# Approach II: duplicate the "umbalanced" group
+
+Next, we try to duplicate the umbalanced group using SMOTE (Synthetic Minority Over-sampling Technique). It addresses imbalanced data by creating synthetic samples for the minority class instead of simply duplicating existing ones. It works by selecting a minority class sample, finding its nearest minority neighbors, and generating new points along the line segments connecting them. 
+
+It offers the option for the user to choose the number of duplicates. To be conservative, we start with a minimum number of duplicates the method allows. The current design duplicates 1 to 1 number of samples to the unbalanced group. 
+
+## E.Coli
+
+In terms of E.Coli contamination and Wilcoxon rank-sum test, we do not observe significant differences in the risk scores between uncontaminated and contaminated wells. Note that Wilcoxon rank-sum test tries to identify whether one group is stochastically larger than the other.
+
+In terms of logistic regression, we do not observe statistical significance of risk score in explaining E.Coli contamination risk. It has an area under curve (AUC) of 0.531. So, the explanatory power is poor. So, it is natural if a nonlinear relation exists. 
+
+It motivates the use of generalizes additive model (GAM). In specific, it assumes
+$$
+  \log \mathrm{odds(contamination)} = \beta_0 +  \beta(\mathrm{risk})
+$$
+Under this model, the effect of risk on the contamination risk can be nonlinear. So, it is much more flexible. According to the results below, the nonlinear effect of risk is indeed significant. The resulting model has an AUC of 0.70. The estimates of $\beta(\mathrm{risk})$ are shown in the following plot, along with dashed lines being the confidence intervals. We can see significantly positive effects when risk is between 0.18 and 0.25, though with a significantly negative effect in a narrow region around 0.17. In other regions, the effects are not significant.
+
+
+```{r}
+set.seed(123)
+subset <- ecoli_binary %>% st_drop_geometry() 
+subset <- subset[, c(19, 20, 21, 22, 23)]
+subset <- na.omit(subset)
+target <- ifelse(subset[, 5] == 'Present', 1, 0)
+X <- subset[, 1:4]
+genData <- SMOTE(X = X, target = target, dup_size = 1)$data
+genData$class <- ifelse(genData$class == '1', 1, 0)
+table(genData$class)
+
+###################### Wilcoxon rank-sum test
+with(genData, wilcox.test(x = risk[which(class == 1)],
+                          y = risk[which(class == 0)]))
+
+###################### logistic regression
+mod <- glm(class ~ risk, family = 'binomial', data = genData)
+summary(mod)
+
+###################### AUC
+prob <- predict(mod, type = "response")
+roc_obj <- roc(response = genData$class, predictor = prob)
+auc_value <- auc(roc_obj)
+
+###################### generalized additive models
+mod <- gam(class ~ s(risk, bs = 'cr', k = 15), family = 'binomial', data = genData)
+summary(mod)
+# gam.check(mod)
+prob <- predict(mod, type = "response")
+roc_obj <- roc(response = genData$class, predictor = prob)
+
+### area under curve
+(auc_value <- auc(roc_obj))
+
+### coefficient estimate
+plot(mod, select = 1, residuals = FALSE, 
+     main = 'Ecoli contamination risk',
+     xlab = 'Risk', ylab = '$\\hat{f}(x)$',
+     col = 'magenta',
+     pch = 16)
+abline(h = 0, lty = 2, col = 'black')
+```
+
+
+## Coliform
+
+In terms of Coliform contamination and Wilcoxon rank-sum test, we do observe significant differences in the risk scores between uncontaminated and contaminated wells.
+
+In terms of logistic regression, we do observe statistical significance of risk score in explaining Coliform contamination risk. It has an area under curve (AUC) of 0.676. 
+
+Next, we check if there is a need to use GAM. According to the results below, the nonlinear effect of risk is not significant. Hence, sticking to the logistic regression should be fine. 
+
+
+```{r}
+set.seed(123)
+subset <- ecoli_binary %>% st_drop_geometry() 
+subset <- subset[, c(19, 20, 21, 22, 24)]
+subset <- na.omit(subset)
+target <- ifelse(subset[, 5] == 'Present', 1, 0)
+X <- subset[, 1:4]
+genData <- SMOTE(X = X, target = target, dup_size = 1)$data
+genData$class <- ifelse(genData$class == '1', 1, 0)
+table(genData$class)
+
+###################### Wilcoxon rank-sum test
+with(genData, wilcox.test(x = risk[which(class == 1)],
+                          y = risk[which(class == 0)]))
+
+###################### logistic regression
+mod <- glm(class ~ risk, family = 'binomial', data = genData)
+summary(mod)
+
+###################### AUC
+prob <- predict(mod, type = "response")
+roc_obj <- roc(response = genData$class, predictor = prob)
+auc_value <- auc(roc_obj)
+
+###################### generalized additive models
+mod <- gam(class ~ s(risk, bs = 'cr', k = 15), family = 'binomial', data = genData)
+summary(mod)
+```
