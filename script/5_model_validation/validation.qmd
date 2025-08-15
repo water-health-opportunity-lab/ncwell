@@ -58,7 +58,7 @@ microbio_with_risk_hurricane <- st_join(microbio_proj_hurricane, risk, join = st
   filter(!is.na(risk)) %>%
   filter(!Ecoli_Result %in% c("Not Tested", ""))
 
-nrow(microbio_with_risk_hurricane)
+n_pre_filter_hurricane <- nrow(microbio_with_risk_hurricane)
 
 microbio_with_risk_hurricane$Date_Collected <- mdy(microbio_with_risk_hurricane$Date_Collected)
 microbio_with_risk_hurricane <- microbio_with_risk_hurricane %>%
@@ -68,7 +68,7 @@ microbio_with_risk_hurricane <- microbio_with_risk_hurricane %>%
   slice(1) %>%
   ungroup()
 
-nrow(microbio_with_risk_hurricane)
+n_post_filter_hurricane <- nrow(microbio_with_risk_hurricane)
 
 # Join NCDHHS and risk index for microbio_data_microbiology
 microbio_sf_microbiology <- st_as_sf(microbio_data_microbiology, coords = c("Longitude", "Latitude"), crs = 4326)
@@ -79,7 +79,7 @@ microbio_with_risk_microbiology <- st_join(microbio_proj_microbiology, risk, joi
   filter(!is.na(risk)) %>%
   filter(!Ecoli_Result %in% c("Not Tested", "")) 
 
-nrow(microbio_with_risk_microbiology)
+n_pre_filter_microbio <- nrow(microbio_with_risk_microbiology)
 
 microbio_with_risk_microbiology$Date_Collected <- mdy(microbio_with_risk_microbiology$Date_Collected)
 microbio_with_risk_microbiology <- microbio_with_risk_microbiology %>%
@@ -89,8 +89,10 @@ microbio_with_risk_microbiology <- microbio_with_risk_microbiology %>%
   slice(1) %>%
   ungroup()
 
-nrow(microbio_with_risk_microbiology)
+n_post_filter_microbio <- nrow(microbio_with_risk_microbiology)
 ```
+
+`{r} n_pre_filter_hurricane - n_post_filter_hurricane` samples were filtered out from the Hurricane Helene dataset. `{r} n_pre_filter_microbio - n_post_filter_microbio` samples were filtered out from the general microbiology dataset.
 
 Some of the addresses were not fully reported (i.e. only street or road names were included in the NCDHHS report) and this was reflected after geocoding. However, we will proceed without filtering out testing locations with a geocoding accuracy score of less than 0.8 (as per the Geocod.io documentation) due to the 1 km x 1 km resolution of the risk index.
 
@@ -119,21 +121,10 @@ microbio_with_risk <- rbind(microbio_with_risk_hurricane, microbio_with_risk_mic
 # Sort by counties with most samples
 sort(table(microbio_with_risk$System_Name), decreasing = TRUE)
 ```
-
-We observe:
-
--   484 uncontaminated and 38 contaminated E. coli samples in `microbio_with_risk_hurricane`
-
--   6620 uncontaminated and 150 contaminated E. coli samples in `microbio_with_risk_microbiology`
-
--   329 uncontaminated and 193 contaminated Total Coliform samples in `microbio_with_risk_hurricane`
-
--   4950 uncontaminated and 1820 contaminated Total Coliform samples in `microbio_with_risk_microbiology`.
-
-There is a major class imbalance between uncontaminated and contaminated samples which will be addressed via permutation tests and SMOTE.
+#### Check for the values in Ecoli_Result and Total_Coliform_Result
 
 ```{r collapse = TRUE}
-# Check for the values included in Ecoli_Result and Total_Coliform_Result
+# Check for unique values
 table(microbio_with_risk_hurricane$Ecoli_Result)
 table(microbio_with_risk_microbiology$Ecoli_Result)
 
@@ -154,26 +145,7 @@ microbio_continuous <- microbio_with_risk %>%
   mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1"), "Absent", "Present"))
 ```
 
-There were 522 samples specific to Hurricane Helene testing programs and 6770 samples from general well testing after Hurricane Helene.
-
-In total, there are 6751 binary testing results and 68 continuous testing results.
-
-```{r collapse = TRUE}
-# Number of hurricane tests
-length(microbio_with_risk_hurricane$System_Name)
-# Number of microbiology tests
-length(microbio_with_risk_microbiology$System_Name)
-
-# Number of binary E. coli tests
-length(which(microbio_with_risk$Ecoli_Result %in% c("Absent", "Present")))
-# Number of continuous E. coli tests
-length(which(!(microbio_with_risk$Ecoli_Result %in% c("Absent", "Present"))))
-
-# Number of binary Total Coliform tests
-length(which(microbio_with_risk$Total_Coliform_Result %in% c("Absent", "Present")))
-# Number of continuous Total Coliform tests
-length(which(!(microbio_with_risk$Total_Coliform_Result %in% c("Absent", "Present"))))
-```
+#### Binarize continuous testing results
 
 In the pooled datasets created below, binary and continuous E. coli and Total Coliform testing results measured in MPN (most probable number)/100 mL were pooled together after the continuous testing results were binarized. The [WHO](https://pmc.ncbi.nlm.nih.gov/articles/PMC7313150/#:~:text=According%20to%20the%20World%20Health,100%20ml%20is%20medium%20risk.) recommends that “Zero count of E. coli per 100 ml of water is considered safe for drinking. A count of 1–10 MPN/100 ml is regarded as low risk; 11–100 MPN/100 ml is medium risk.” Therefore, we consider continuous testing results of 0, \<1, or 1 MPN/100 mL to be uncontaminated, and testing results \>1 MPN/100 mL to be contaminated.
 
@@ -192,9 +164,9 @@ microbio_pooled <- microbio_with_risk %>%
   mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1", "Absent"), "Absent", "Present"))
 ```
 
-Since `microbio_with_risk_microbiology` contained samples outside of western North Caroline, the region most affected by Hurricane Helene, we will create `microbio_pooled_affected` to merge `microbio_with_risk_hurricane` with only `microbio_with_risk_microbiology` samples that were collected from the 25 counties listed in this [paper](https://pubs.acs.org/doi/10.1021/acs.estlett.5c00503).
+#### Filter for only western counties
 
-After filtering for only western counties, there were 1635 samples remaining.
+Since `microbio_with_risk_microbiology` contained samples outside of western North Caroline, the region most affected by Hurricane Helene, we will create `microbio_pooled_affected` to merge `microbio_with_risk_hurricane` with only `microbio_with_risk_microbiology` samples that were collected from the 25 counties listed in this [paper](https://pubs.acs.org/doi/10.1021/acs.estlett.5c00503).
 
 ```{r}
 counties <- c("ALEXANDER CO ENVIRONMENTAL HEALTH", 
@@ -226,9 +198,13 @@ counties <- c("ALEXANDER CO ENVIRONMENTAL HEALTH",
 microbio_pooled_affected <- rbind(microbio_pooled_hurricane, microbio_pooled_microbiology) %>%
   filter(!duplicated(StarLiMS_ID)) %>%
   filter(System_Name %in% counties)
+
+n_microbio_pooled_affected <- nrow(microbio_pooled_affected)
 ```
 
-There is a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.4901e-05), with samples from the western counties having a mean risk of 0.181 and non-western counties having a mean risk of 0.175.
+After filtering for only western counties, there were `{r} n_microbio_pooled_affected` samples remaining.
+
+#### Wilcoxon rank-sum test for risk index of western vs. non-western counties
 
 ```{r}
 microbio_pooled <- microbio_pooled %>% mutate(Is_Western = System_Name %in% counties)
@@ -240,6 +216,8 @@ wilcox.test(microbio_pooled$risk ~ microbio_pooled$Is_Western,
             alternative = "less")
 ```
 
+There is a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.0012), with samples from the western counties having a mean risk of 0.181 and non-western counties having a mean risk of 0.175.
+
 ### 1.4 Percentage of contaminated samples per week
 
 We use the plots to determine a cutoff date for the time period when a hurricane's aftermath continues to impact microbial contamination in well water.
@@ -250,7 +228,7 @@ For Hurricane Helene testing, the smoothed curve shows that the proportion of co
 
 The sample size per week decreased over time, likely due to decreased interest in testing after the impacts of Hurricane Helen subsided.
 
-```{r, fig.show="hold", out.width="30%"}
+```{r collapse = TRUE}
 # microbio_pooled_hurricane$Date_Collected <- mdy(microbio_pooled_hurricane$Date_Collected)
 microbio_weekly_summary_hurricane <- microbio_pooled_hurricane %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
@@ -279,7 +257,7 @@ ggplot(microbio_weekly_summary_hurricane, aes(x = week, y = n)) +
 
 For general microbiology testing, the smoothed curve shows that the proportion of contaminated samples for both E. coli and Total Coliform testing reached the lowest point around the beginning of March.
 
-```{r, fig.show="hold", out.width="30%"}
+```{r collapse = TRUE}
 # microbio_pooled_microbiology$Date_Collected <- mdy(microbio_pooled_microbiology$Date_Collected)
 microbio_weekly_summary_microbiology <- microbio_pooled_microbiology %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
@@ -308,7 +286,7 @@ ggplot(microbio_weekly_summary_microbiology, aes(x = week, y = n)) +
 
 When results for both testing programs are combined, the proportion of contaminated E. coli samples reached the lowest point in mid-February, whereas the proportion of contaminated Total Coliform samples reached the lowest point in early March.
 
-```{r, fig.show="hold", out.width="30%"}
+```{r collapse = TRUE}
 # microbio_pooled$Date_Collected <- mdy(microbio_pooled$Date_Collected)
 microbio_weekly_summary_pooled <- microbio_pooled %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
@@ -337,7 +315,7 @@ ggplot(microbio_weekly_summary_pooled, aes(x = week, y = n)) +
 
 When results for both testing programs are combined and only the western counties listed [here](https://pubs.acs.org/doi/10.1021/acs.estlett.5c00503) are considered, the proportion of contaminated E. coli samples reached the lowest point in mid-February, whereas the proportion of contaminated Total Coliform samples reached the lowest point in early March.
 
-```{r, fig.show="hold", out.width="30%"}
+```{r collapse = TRUE}
 # microbio_pooled_affected$Date_Collected <- mdy(microbio_pooled_affected$Date_Collected)
 microbio_weekly_summary <- microbio_pooled_affected %>%
   mutate(week = floor_date(Date_Collected, "week")) %>%
@@ -364,19 +342,7 @@ ggplot(microbio_weekly_summary, aes(x = week, y = n)) +
 
 ### 1.5 Filter dates to effective time period (9/25/24 - 3/1/25)
 
-After filtering the dates to the effective time period, there were 3163 samples in `microbio_pooled_filtered` (all locations) and 806 samples for `microbio_pooled_affected_filtered` (western counties).
-
-We observe:
-
--   3097 uncontaminated and 66 contaminated E. coli samples in `microbio_pooled_filtered`
-
--   778 uncontaminated and 28 contaminated E. coli samples in `microbio_pooled_affected_filtered`
-
--   2333 uncontaminated and 830 contaminated Total Coliform samples in `microbio_pooled_filtered`
-
--   573 uncontaminated and 233 contaminated Total Coliform samples in `microbio_pooled_affected_filtered`.
-
-Downstream analysis will be performed using `microbio_pooled_affected_filtered`.
+Analyzing the plots from section 1.4, we see that the level of microbial contamination falls to its lowest point in early March. Here, we filter samples collected after 3/1/25, the end of the effective time period. 
 
 ```{r collapse = TRUE}
 start_date <- '2024-09-25'
@@ -385,19 +351,32 @@ end_date <- '2025-03-01'
 microbio_pooled_filtered <- microbio_pooled %>% filter(between(Date_Collected, as.Date(start_date), as.Date(end_date)))
 microbio_pooled_affected_filtered <- microbio_pooled_affected %>% filter(between(Date_Collected, as.Date(start_date), as.Date(end_date)))
 
-nrow(microbio_pooled_filtered)
-nrow(microbio_pooled_affected_filtered)
+n_microbio_pooled_filtered <- nrow(microbio_pooled_filtered)
+n_microbio_pooled_affected_filtered <- nrow(microbio_pooled_affected_filtered)
 
-table(microbio_pooled_filtered$Ecoli_Result_Binary)
-table(microbio_pooled_affected_filtered$Ecoli_Result_Binary)
+table_filtered_ecoli <- table(microbio_pooled_filtered$Ecoli_Result_Binary)
+table_affected_filtered_ecoli <- table(microbio_pooled_affected_filtered$Ecoli_Result_Binary)
 
-table(microbio_pooled_filtered$Coliform_Result_Binary)
-table(microbio_pooled_affected_filtered$Coliform_Result_Binary)
+table_filtered_coliform <- table(microbio_pooled_filtered$Coliform_Result_Binary)
+table_affected_filtered_coliform <- table(microbio_pooled_affected_filtered$Coliform_Result_Binary)
 ```
+After filtering the dates, there were `{r} n_microbio_pooled_filtered` samples in `microbio_pooled_filtered` (all locations) and `{r} n_microbio_pooled_affected_filtered` samples for `microbio_pooled_affected_filtered` (western counties).
 
-### 2.1.1 Risk index distribution for E. coli
+We observe:
 
-Based on the Shapiro-Wilk tests, we reject the null hypothesis that the sample of risk indices for uncontaminated samples comes from a normal distribution (p = 1.223e-08), but we fail to reject the null hypothesis for contaminated samples (p = 0.6409). However, looking at the raincloud plot for contaminated samples, we see that it is non-normal.
+-   `{r} table_filtered_ecoli["Absent"]` uncontaminated and `{r} table_filtered_ecoli["Present"]` contaminated E. coli samples in `microbio_pooled_filtered`
+
+-   `{r} table_affected_filtered_ecoli["Absent"]` uncontaminated and `{r} table_affected_filtered_ecoli["Present"]` contaminated E. coli samples in `microbio_pooled_affected_filtered`
+
+-   `{r} table_filtered_coliform["Absent"]` uncontaminated and `{r} table_filtered_coliform["Present"]` contaminated Total Coliform samples in `microbio_pooled_filtered`
+
+-   `{r} table_affected_filtered_coliform["Absent"]` uncontaminated and `{r} table_affected_filtered_coliform["Present"]` contaminated Total Coliform samples in `microbio_pooled_affected_filtered`.
+
+Downstream analysis will be performed using `microbio_pooled_affected_filtered`.
+
+### 2.1.1 Risk index distribution for E. coli in western counties
+
+Based on the Shapiro-Wilk tests, we reject the null hypothesis that the sample of risk indices for uncontaminated samples comes from a normal distribution (p = 5.625e-09), but we fail to reject the null hypothesis for contaminated samples (p = 0.7522). However, looking at the raincloud plot for contaminated samples, we see it is non-normal.
 
 ```{r}
 table(microbio_pooled_affected_filtered$Ecoli_Result_Binary)
@@ -417,18 +396,18 @@ shapiro.test(subset(microbio_pooled_affected_filtered, Ecoli_Result_Binary == "A
 shapiro.test(subset(microbio_pooled_affected_filtered, Ecoli_Result_Binary == "Present")$risk)
 ```
 
-### 2.1.2 Wilcoxon rank-sum test for western counties
+### 2.1.2 Wilcoxon rank-sum test for E. coli in western counties
 
-There is a marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated E. coli tests (p = 0.07763).
+There is a marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated E. coli tests (p = 0.07162).
 
 ```{r}
 wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Ecoli_Result_Binary,
             alternative = "less")
 ```
 
-### 2.2.1 Risk index distribution for Total Coliform
+### 2.2.1 Risk index distribution for Total Coliform in western counties
 
-Based on the raincloud plots and Shapiro-Wilk tests, we reject the null hypothesis that the sample of risk indices for both uncontaminated (p = 3.335e-07) and contaminated samples (p = 0.00465) comes from a normal distribution.
+Based on the raincloud plots and Shapiro-Wilk tests, we reject the null hypothesis that the sample of risk indices for both uncontaminated (p = 3.541e-07) and contaminated samples (p = 0.002128) comes from a normal distribution.
 
 ```{r}
 table(microbio_pooled_affected_filtered$Coliform_Result_Binary)
@@ -448,9 +427,9 @@ shapiro.test(subset(microbio_pooled_affected_filtered, Coliform_Result_Binary ==
 shapiro.test(subset(microbio_pooled_affected_filtered, Coliform_Result_Binary == "Present")$risk)
 ```
 
-### 2.2.2 Wilcoxon rank-sum test for all counties
+### 2.2.2 Wilcoxon rank-sum test for Total Coliform in western counties
 
-There is a marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated Total Coliform tests (p = 0.064).
+There is not marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated Total Coliform tests (p = 0.2258).
 
 ```{r}
 wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Coliform_Result_Binary,
@@ -461,9 +440,9 @@ wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_fi
 
 The code below constructs four logistic regression models in total to classify samples into uncontaminated or contaminated classes. For E. coli contamination, it constructs one model using the overall risk index and one model using the individual risk modules: vulnerability, hazard, and capacity. The same is done for Total Coliform contamination.
 
-For E. coli contamination, the overall risk was not a significant predictor (p = 0.259). In the model with the individual risk modules, none of the modules were significant predictors. The model using overall risk as a sole predictor (AIC = 283.6) performed better than the module using individual risk modules (AIC = 286.16).
+For E. coli contamination, the overall risk was not a significant predictor (p = 0.244). In the model with the individual risk modules, none of the modules were significant predictors. The model using overall risk as a sole predictor (AIC = 252.48) performed marginally better than the module using individual risk modules (AIC = 254.67).
 
-For Total Coliform contamination, the overall risk was not a significant predictor (p = 0.153). In the model with the individual risk modules, the capacity module was a highly significant predictor (p = 0.000276). Unlike for E. coli contamination, the model using individual risk modules (AIC = 1079.6) performed better than the module using overall risk (AIC = 1071.7).
+For Total Coliform contamination, the overall risk was not a significant predictor (p = 0.419). In the model with the individual risk modules, the capacity module was a highly significant predictor (p = 0.00316). Unlike for E. coli contamination, the model using individual risk modules (AIC = 978.6) performed better than the module using overall risk (AIC = 983.27).
 
 ```{r}
 microbio_pooled_affected_filtered <- microbio_pooled_affected_filtered %>%
@@ -485,7 +464,7 @@ summary(multi_log_coliform)
 
 ## 4. Youden's J statistic for risk index split
 
-Youden's J statistic was used to compute the cutoff threshold for contaminated vs. uncontaminated samples. The cutoff was 0.2103 for E. coli and 0.2006 for Coliform.
+Youden's J statistic was used to compute the cutoff threshold for contaminated vs. uncontaminated samples. The cutoff was 0.2103 for E. coli and 0.1648 for Coliform.
 
 ```{r}
 # ROC with Youden's J statistic
