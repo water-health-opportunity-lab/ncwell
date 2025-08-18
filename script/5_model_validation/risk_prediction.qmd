@@ -1,0 +1,338 @@
+---
+title: "Contamination Risk Prediction"
+format: html
+toc: true
+editor: visual
+code-fold: true
+warning: false 
+message: false
+self-contained: true
+tabset: true
+---
+
+```{r, warning=FALSE,echo=FALSE,message=FALSE,results='hide'}
+# load packages
+library("MASS")
+library("dplyr")
+library("factoextra")
+library("exactextractr")
+library("tigris")
+library("ggplot2")
+library("plotly")
+library("sf")
+library("tibble")
+library("GGally")
+library("cluster")
+library("mclust")
+library("randomForest")
+library("caret")
+library('pROC')
+library('smotefamily')
+
+## read data
+data <- st_read('nc_grid_validation.gpkg')
+data$time <- as.numeric(as.Date(data$Date_Collected) - as.Date("2024-09-25"))
+data <- data[, -c(1:15, 113)]
+data <- st_transform(data, 4326)
+
+# extract coordinates (for POINT geometries)
+coords <- st_coordinates(data)
+
+# add lon/lat as new columns
+data$lon <- coords[,1]
+data$lat <- coords[,2]
+
+## data for analysis
+data_analysis <- st_drop_geometry(data)
+data_analysis <- data_analysis[, -c(1:3)]
+data_analysis <- na.omit(data_analysis)
+data_analysis$Coliform_Result_Binary <- as.factor(data_analysis$Coliform_Result_Binary)
+
+```
+
+## Introduction
+
+We recently obtained well testing results for private wells in the western counties of North Carolina, with a focus on total coliform contamination. The presence of total coliform in drinking water indicates potential structural vulnerabilities in the water system, such as cracks or leaks, that may allow harmful microbes to enter. The dataset includes approximately 800 private wells.
+
+In this report, we apply a random forest model to predict contamination risk based on three sets of predictors: (1) spatial location, (2) time since the hurricane Helene affecting North Carolina, and (3) roughly 100 additional variables derived from capacity, vulnerability, and hazard modules. The data will be divided into training and testing sets using a 4:1 ratio.
+
+Because the dataset is imbalanced, we conduct analyses under two settings: (1) using the original data, and (2) using a synthetic dataset generated with the Synthetic Minority Oversampling Technique (SMOTE) to address class imbalance.
+
+```{r}
+table(data_analysis$Coliform_Result_Binary)
+```
+
+In view of this imbalance, we will maximize the F1 score to achieve a balance between specificity and sensitivity. In specific, it is defined as
+
+$$
+F_1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}
+$$
+
+where the precision and recall are defined as
+
+$$
+\text{Precision} = \frac{\text{TP}}{\text{TP} + \text{FP}}, 
+\quad 
+\text{Recall} = \frac{\text{TP}}{\text{TP} + \text{FN}}
+$$
+
+The F1 score balances precision and recall by their harmonic mean. Precision measures how many predicted contaminated wells are truly contaminated, and recall measures how many actual contaminated wells are correctly identified. Maximizing the F1 score helps select a cutoff that captures most contaminated wells while limiting false alarms.
+
+According to the results, **the prediction performance without using SMOTE is better than that using SMOTE**. And random forest achieves a **moderate** prediction performance (an AUC of 0.63).
+
+## Results (without SMOTE)
+
+First, we fit the random forest using \texttt{mtry = 9} and growing 1000 trees. To interpret the results, we present the variable importance plot below. Variable importance measures how much each variable contributes to the random forest’s performance. Mean Decrease Accuracy indicates how much the model’s accuracy drops if a variable is randomly shuffled, while Mean Decrease Gini reflects how much a variable helps separate classes by reducing node impurity (how mixed the classes are within the node). High values in either metric indicate variables with high importance.
+
+```{r}
+# set a random seed for reproducibility
+set.seed(666)
+
+# training and testing split
+train_index <- createDataPartition(data_analysis$Coliform_Result_Binary, p = 0.8, list = FALSE)
+train_data <- data_analysis[train_index, ]
+test_data  <- data_analysis[-train_index, ]
+
+# random forest
+mod.rf <- randomForest(Coliform_Result_Binary ~ ., 
+                         data = train_data, 
+                         ntree = 1000,          
+                         mtry = floor(sqrt(ncol(train_data)-1)), 
+                         importance = TRUE)
+
+# Variable importance plot
+var_imp <- importance(mod.rf)
+
+# Top 10 by MeanDecreaseAccuracy
+top10_acc <- data.frame(
+  Variable = rownames(var_imp),
+  Importance = var_imp[, "MeanDecreaseAccuracy"]
+) %>%
+  arrange(desc(Importance)) %>%
+  slice(1:10)
+
+ggplot(top10_acc, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_col(fill = "magenta") +
+  coord_flip() +
+  labs(title = "Top 10 Variables by Mean Decrease Accuracy",
+       x = "", y = "Mean Decrease Accuracy") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(face = "bold"),
+    panel.grid = element_blank()   # remove grid lines
+  )
+
+# Top 10 by MeanDecreaseGini
+top10_gini <- data.frame(
+  Variable = rownames(var_imp),
+  Importance = var_imp[, "MeanDecreaseGini"]
+) %>%
+  arrange(desc(Importance)) %>%
+  slice(1:10)
+
+ggplot(top10_gini, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_col(fill = "deepskyblue") +
+  coord_flip() +
+  labs(title = "Top 10 Variables by Mean Decrease Gini",
+       x = "", y = "Mean Decrease Gini") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(face = "bold"),
+    panel.grid = element_blank()   
+  )
+```
+
+In terms of model accuracy, the high contributing variables are (1) time to when the hurricane hits NC state, (2) land cover, (3) temperature, (4) Actual evapotranspiration, and (5) Impact of concentrated animal feeding operation.
+
+In terms of discriminatory power, the high contributing variables are (1) time to when the hurricane hits NC state, (2) pH, (3) longitude, (4) latitude, and (5) agricultural runoff.
+
+Next, we try to determine the cutoff for the contamination risk and assess its prediction performance.
+
+```{r}
+# estimate risk
+pred_probs <- predict(mod.rf, newdata = test_data, 
+                      type = "prob")[,2]
+
+# find the cutoff that maximizes F1score
+roc_obj <- roc(response = test_data$Coliform_Result_Binary,
+               predictor = pred_probs,
+               levels = c("Absent", "Present")) 
+
+thresholds <- seq(0, 1, by = 0.01)
+f1_results <- data.frame(threshold = thresholds,
+                         precision = NA,
+                         recall = NA,
+                         F1 = NA)
+
+for(i in seq_along(thresholds)){
+  thresh <- thresholds[i]
+  pred_class <- factor(ifelse(pred_probs > thresh, "Present", "Absent"),
+                       levels = c("Absent", "Present"))
+  
+  cm <- confusionMatrix(pred_class, as.factor(test_data$Coliform_Result_Binary), positive = "Present")
+  
+  precision <- cm$byClass["Pos Pred Value"]
+  recall <- cm$byClass["Sensitivity"]
+  f1 <- 2 * precision * recall / (precision + recall)
+  
+  f1_results$precision[i] <- precision
+  f1_results$recall[i] <- recall
+  f1_results$F1[i] <- f1
+}
+
+# Find threshold with max F1
+best_f1 <- f1_results[which.max(f1_results$F1), ]
+best_f1
+
+pred_class <- ifelse(pred_probs > 0.33, 'Present', 'Absent')
+
+# Confusion matrix
+confusionMatrix(as.factor(pred_class), 
+                as.factor(test_data$Coliform_Result_Binary),
+                positive = 'Present')
+# area under curve
+auc(roc_obj)
+```
+
+The cutoff that maximizes F1 score is 0.33. The resulting model has an area under curve (AUC) of 0.6271, which is better than random guess. Overall, the model is moderately effective at predicting well contamination. It correctly identifies a fair number of contaminated wells, but it also misses some, meaning some unsafe wells could go undetected. At the same time, it classifies a number of safe wells as contaminated, which could lead to unnecessary testing or concern.
+
+## Results (with SMOTE)
+
+Next, we try applying random forests on the synthetic data generated by SMOTE, which uses the idea of nearest neighbors.
+
+```{r}
+model.mat <- model.matrix(~ . - Coliform_Result_Binary, 
+                          data = data_analysis)
+train_data <- model.mat[train_index, -1]
+
+## SMOTE
+syn_train <- SMOTE(X = as.data.frame(train_data), 
+                   dup_size = 1, 
+                   target = data_analysis$Coliform_Result_Binary[train_index])$data
+
+colnames(syn_train) <- make.names(names(syn_train), 
+                                  unique = TRUE)
+syn_train$class <- as.factor(syn_train$class)
+table(syn_train$class)
+```
+
+Similarly, we present the variable importance plot below.
+
+```{r}
+# set a random seed for reproducibility
+set.seed(666)
+
+# fit a random forest
+mod.rf <- randomForest(class ~ ., 
+                       ntree = 1000,
+                       data = syn_train,
+                       mtry = floor(sqrt(ncol(syn_train) - 2)),
+                       importance = TRUE)
+
+# Variable importance plot
+var_imp <- importance(mod.rf)
+
+# Top 10 by MeanDecreaseAccuracy
+top10_acc <- data.frame(
+  Variable = rownames(var_imp),
+  Importance = var_imp[, "MeanDecreaseAccuracy"]
+) %>%
+  arrange(desc(Importance)) %>%
+  slice(1:10)
+
+ggplot(top10_acc, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_col(fill = "magenta") +
+  coord_flip() +
+  labs(title = "Top 10 Variables by Mean Decrease Accuracy",
+       x = "", y = "Mean Decrease Accuracy") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(face = "bold"),
+    panel.grid = element_blank()   # remove grid lines
+  )
+
+# Top 10 by MeanDecreaseGini
+top10_gini <- data.frame(
+  Variable = rownames(var_imp),
+  Importance = var_imp[, "MeanDecreaseGini"]
+) %>%
+  arrange(desc(Importance)) %>%
+  slice(1:10)
+
+ggplot(top10_gini, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_col(fill = "deepskyblue") +
+  coord_flip() +
+  labs(title = "Top 10 Variables by Mean Decrease Gini",
+       x = "", y = "Mean Decrease Gini") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(face = "bold"),
+    panel.grid = element_blank()   
+  )
+```
+
+In terms of model accuracy, the high contributing variables are (1) time to when the hurricane hits NC state, (2) agricultural runoff, (3) Wind erodibility group, (4) % of crowded housing, and (5) Actual evapotranspiration.
+
+In terms of discriminatory power, the high contributing variables are (1) time to when the hurricane hits NC state, (2) agricultural runoff, (3) Wind erodibility group, (4) latitude, and (5) percent of single parent.
+
+Note that after using SMOTE, the contributing variables in terms of Mean Decrease Accuracy and Mean Decrease Gini are more consistent.
+
+Next, we try to determine the cutoff for the contamination risk and assess its prediction performance.
+
+```{r}
+# Predict on test data
+test_data  <- model.mat[-train_index, -1]
+colnames(test_data) <- make.names(colnames(test_data), 
+                                  unique = TRUE)
+pred_probs <- predict(mod.rf, newdata = test_data, 
+                      type = "prob")[,2]
+
+
+
+test_data$Coliform_Result_Binary <- data_analysis$Coliform_Result_Binary[-train_index]
+roc_obj <- roc(response = test_data$Coliform_Result_Binary,
+               predictor = pred_probs,
+               levels = c("Absent", "Present")) 
+
+# compute F1 score
+thresholds <- seq(0, 1, by = 0.01)
+f1_results <- data.frame(threshold = thresholds,
+                         precision = NA,
+                         recall = NA,
+                         F1 = NA)
+
+for(i in seq_along(thresholds)){
+  thresh <- thresholds[i]
+  pred_class <- factor(ifelse(pred_probs > thresh, "Present", "Absent"),
+                       levels = c("Absent", "Present"))
+  
+  cm <- confusionMatrix(pred_class, as.factor(test_data$Coliform_Result_Binary), positive = "Present")
+  
+  precision <- cm$byClass["Pos Pred Value"]
+  recall <- cm$byClass["Sensitivity"]
+  f1 <- 2 * precision * recall / (precision + recall)
+  
+  f1_results$precision[i] <- precision
+  f1_results$recall[i] <- recall
+  f1_results$F1[i] <- f1
+}
+
+# Find threshold with max F1
+best_f1 <- f1_results[which.max(f1_results$F1), ]
+best_f1
+
+
+pred_class <- ifelse(pred_probs > 0.36, 'Present', 'Absent')
+
+# Confusion matrix
+confusionMatrix(as.factor(pred_class), 
+                as.factor(test_data$Coliform_Result_Binary),
+                positive = 'Present')
+auc(roc_obj)
+```
+
+Notice the prediction performance using SMOTE is worse. It is possible that SMOTE typically improves recall for the minority class but often reduces precision. Since the cutoff is based on F1 score, the overall performance may drop.
