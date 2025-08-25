@@ -30,6 +30,7 @@ library('pROC')
 library('smotefamily')
 library("gstat")
 library('sp')
+library("pdp")
 
 ## read data
 data <- st_read('nc_grid_validation.gpkg')
@@ -43,6 +44,13 @@ coords <- st_coordinates(data)
 # add lon/lat as new columns
 data$lon <- coords[,1]
 data$lat <- coords[,2]
+
+ref <- c(11:12, 21:24, 31, 41:43, 52, 71, 81, 82, 90, 95)
+
+data$landcover <- as.numeric(sapply(data$landcover, function(val) {
+  ref[which.min(abs(ref - val))]
+}))
+data$landcover <- as.factor(data$landcover)
 
 ## data for analysis
 data_analysis <- st_drop_geometry(data)
@@ -80,13 +88,19 @@ $$
 
 The F1 score balances precision and recall by their harmonic mean. Precision measures how many predicted contaminated wells are truly contaminated, and recall measures how many actual contaminated wells are correctly identified. Maximizing the F1 score helps select a cutoff that captures most contaminated wells while limiting false alarms.
 
-According to the results, random forest achieves a **moderate** prediction performance (an AUC of 0.63). And, we do not detect strong spatial dependence in the residuals.
+According to the results, random forest achieves a **moderate** prediction performance (an AUC of 0.66). And, we do not detect strong spatial dependence in the residuals.
 
 ## Random forest
 
-First, we fit the random forest using \texttt{mtry = 9} and growing 1000 trees. To interpret the results, we present the variable importance plot below. Variable importance measures how much each variable contributes to the random forest’s performance. Mean Decrease Accuracy indicates how much the model’s accuracy drops if a variable is randomly shuffled, while Mean Decrease Gini reflects how much a variable helps separate classes by reducing node impurity (how mixed the classes are within the node). High values in either metric indicate variables with high importance.
+To fit the random forest, we first try to tune $\texttt{mtry}$ and $\texttt{nodesize}$. Note that
+
+1.  \\(\\texttt{mtry}\\) stands for the number of variables randomly sampled as candidates at each split. If $\texttt{mtry}$ is small, it reduces variance of the forest by reducing correlation between trees but higher bias for each tree. If $\texttt{mtry}$ is large, it reduces bias of the forest but trees are more correlated. As a result, there is less efficiency gain and overfitting may occur.
+2.  \\(\\texttt{nodesize}\\) specifies the minimum number of observations required in a terminal node (leaf) of a tree. Essentially, it controls how deep the trees can grow. If \\(\\texttt{nodesize}\\) is small, we have very deep trees, which have smaller bias but higher risk of overfitting. If \\(\\texttt{nodesize}\\) is large, we have shallower trees with higher bias and smaller variance.
+
+The tuning is based on out-of-bag (OOB) error. OOB error is an internal estimate of prediction error. Each tree is trained on a bootstrap sample, leaving out some observations. Those are the OOB samples. After the tree is built, it predicts the OOB samples, and aggregating these predictions across all trees gives an error estimate for the full dataset. The current tuning suggests using \\(\\texttt{mtry}\\) of 7 and \\(\\texttt{nodesize}\\) of 3.
 
 ```{r}
+
 # set a random seed for reproducibility
 set.seed(666)
 
@@ -95,12 +109,124 @@ train_index <- createDataPartition(data_analysis$Coliform_Result_Binary, p = 0.8
 train_data <- data_analysis[train_index, ]
 test_data  <- data_analysis[-train_index, ]
 
-# random forest
+# Define search grids
+mtry_grid <- c(3, 5, 7, 9, 11, 13)          
+nodesize_grid <- 1:5
+
+# Store results
+results <- data.frame(
+  mtry = integer(),
+  nodesize = integer(),
+  OOB_Error = numeric()
+)
+
+# Grid search
+for (m in mtry_grid) {
+  for (n in nodesize_grid) {
+    set.seed(666)  
+    rf_model <- randomForest(
+      Coliform_Result_Binary ~ ., 
+      data = train_data,
+      ntree = 2000,        
+      mtry = m,
+      nodesize = n,
+      importance = TRUE
+    )
+    
+    # Get OOB error (classification)
+    oob_error <- rf_model$err.rate[rf_model$ntree, "OOB"]
+    
+    # Save
+    results <- rbind(results, data.frame(
+      mtry = m,
+      nodesize = n,
+      OOB_Error = oob_error
+    ))
+  }
+}
+
+# Show results sorted by error
+opt_res <- results[order(results$OOB_Error), ]
+best_mtry <- opt_res[1, 1]
+best_nodesize <- opt_res[1, 2]
+print(c(best_mtry, best_nodesize))
+```
+
+### Variable importance
+
+Variable importance measures how much each variable contributes to the random forest’s performance. Mean Decrease Accuracy indicates how much the model’s accuracy drops if a variable is randomly shuffled, while Mean Decrease Gini reflects how much a variable helps separate classes by reducing node impurity (how mixed the classes are within the node). High values in either metric indicate variables with high importance.
+
+To improve the prediction results, we filter out variables with variable importance smaller than the 75th quantile of the variable importance across all the variables. This can help improve overfitting issues. The resulting dataset consists of 25 variables. Based on the updated set of variables, we further tune \\(\\texttt{mtry}\\) and \\(\\texttt{nodesize}\\). The current tuning suggests using \\(\\texttt{mtry}\\) of 13 and \\(\\texttt{nodesize}\\) of 5.
+
+To interpret the results, we present the variable importance plot below.
+
+```{r, message=FALSE}
+# set a random seed for reproducibility
+set.seed(666)
 mod.rf <- randomForest(Coliform_Result_Binary ~ ., 
-                         data = train_data, 
-                         ntree = 1000,          
-                         mtry = floor(sqrt(ncol(train_data)-1)), 
-                         importance = TRUE)
+                       data = train_data, 
+                       ntree = 2000,          
+                       mtry = best_mtry, 
+                       nodesize = best_nodesize,
+                       importance = TRUE)
+
+# Variable importance plot
+var_imp <- importance(mod.rf)
+
+# filter out variable importance < median
+index <- which(var_imp[, 3] > quantile(var_imp[, 3], .75))
+index <- setdiff(index, c(95))
+index <- union(index, c(96, 97, 98))
+
+subset <- train_data[, index]
+subset$Coliform_Result_Binary <- train_data$Coliform_Result_Binary
+
+
+# Store results
+results <- data.frame(
+  mtry = integer(),
+  nodesize = integer(),
+  OOB_Error = numeric()
+)
+
+# Grid search
+for (m in mtry_grid) {
+  for (n in nodesize_grid) {
+    set.seed(666)  
+    rf_model <- randomForest(
+      Coliform_Result_Binary ~ ., 
+      data = subset,
+      ntree = 2000,        
+      mtry = m,
+      nodesize = n,
+      importance = TRUE
+    )
+    
+    # Get OOB error (classification)
+    oob_error <- rf_model$err.rate[rf_model$ntree, "OOB"]
+    
+    # Save
+    results <- rbind(results, data.frame(
+      mtry = m,
+      nodesize = n,
+      OOB_Error = oob_error
+    ))
+  }
+}
+
+# Show results sorted by error
+opt_res <- results[order(results$OOB_Error), ]
+best_mtry <- opt_res[1, 1]
+best_nodesize <- opt_res[1, 2]
+print(c(best_mtry, best_nodesize))
+
+set.seed(666)
+mod.rf <- randomForest(Coliform_Result_Binary ~ ., 
+                       data = subset, 
+                       ntree = 2000,          
+                       mtry = best_mtry, 
+                       nodesize = best_nodesize,
+                       importance = TRUE)
 
 # Variable importance plot
 var_imp <- importance(mod.rf)
@@ -146,9 +272,56 @@ ggplot(top10_gini, aes(x = reorder(Variable, Importance), y = Importance)) +
   )
 ```
 
-In terms of model accuracy, the high contributing variables are (1) time to when the hurricane hits NC state, (2) land cover, (3) temperature, (4) Actual evapotranspiration, and (5) Impact of concentrated animal feeding operation.
+In terms of model accuracy, the high contributing variables are (1) time to when the hurricane hits NC state, (2) precipitation, (3) Potassium Feldspar, (4) pH, and (5) temperature.
 
-In terms of discriminatory power, the high contributing variables are (1) time to when the hurricane hits NC state, (2) pH, (3) longitude, (4) latitude, and (5) agricultural runoff.
+In terms of discriminatory power, the high contributing variables are (1) time to when the hurricane hits NC state, (2) pH, (3) percentage of new home, (4) agricultural runoff, and (5) groundwater Nitrate (domestic wells).
+
+### Partial dependence plot
+
+Next, we use partial dependence plot to visualize the effect of the variables on the predicted contamination risk. For a given variable, its partial dependence plot shows how the model’s predicted probability changes as that variable is varied, while averaging over the values of all other variables in the data. However, it is important to emphasize that **partial dependence plot does not account for confounding effects**. So, caution is needed when interpreting the results.
+
+```{r}
+vars <- c('time', 'ppt', 'A_Tot_K_fs',
+          'pH', 'tmean', 
+          'no3_dom', 'ag_runoff', 'pct_new_home')
+xlabs <- c('Time', 'Precipitation', 'Potassium Feldspar',
+           'pH', 'Temperature', 
+           'Groundwater Nitrate (Domestic)', 'Agricultural Runoff', 
+           'Percentage of New Home')
+cols <- c('deepskyblue', 'magenta', 'indianred1', 
+          'slateblue', 'royalblue', 'cyan2', 
+          'springgreen', 'khaki2')
+
+for (i in 1:8) {
+  
+  pdp_var <- partial(mod.rf, 
+                     pred.var = vars[i],        
+                     prob = TRUE,              
+                     which.class = 2,
+                     grid.resolution = 50,     
+                     train = subset)  
+  
+  pdp_df <- as.data.frame(pdp_var)
+  
+  plot(x = pdp_df[, 1], y = pdp_df[, 2], type = 'l',
+       col = cols[i], lwd = 2,
+       main = paste0('Contamination Risk on ', xlabs[i]),
+       xlab = xlabs[i], ylab = 'Predicted Probability')
+}
+```
+
+Note that
+
+1.  For time, the contamination risk first sharply decreases and then flattens.
+2.  For precipitation, its relation with contamination risk turns out to be U-shape. When there is moderate rainfall, there’s enough water to flush contaminants downward and dilute them, but not too much to cause deep leaching.
+3.  For potassium feldspar, its relation to contamination risk turns out to be U-shaped. If there is low feldspar content in the soils, it indicates soils are highly weathered, which can make the contaminants more mobile. When there is high feldspar content, soils are less weathered and may have lower capacity to hold water. So, contaminants may move more directly into groundwater.
+4.  There is an U-shape relation between PH and contamination risk. Note that the minimum is reached around when PH is between 5.0 and 5.2. It is possible that the soil tends to trap contaminants better when PH is in this range. But the contaminants are more mobile and soluble in other ranges.
+5.  For temperature (square root), its effect on contamination risk is flat when it is smaller than 3.8. However, it increases the contamination risk when it is greater than 3.8. It is expected as higher temperature implies more active microbiological and chemical activities.
+6.  There is an U-shape relation between contamination risk and groundwater Nitrate (domestic). Note that a log transformation was applied to groundwater Nitrate. Moderate Nitrate levels may reflect a balanced recharge and dilution conditions. In other words, there is enough recharge to dilute Nitrate, but not so much infiltration that brings in many contaminants. When Nitrate levels are really high, it may indicate strong presence of agricultural or wastewater. When Nitrate levels are low, the contamination risk can still be present.
+7.  For agricultural runoff, its effect on contamination risk is flat when agricultural runoff is between 20 and 48. But contamination risk suddenly reduces around 50 and increases again after 65. This may appear counterintuitive. There may exist some confounding factors. For example, areas with intense agriculture may coincide with less dense urban development, which could be a stronger driver of contamination risk.
+8.  For % of new home, its relation to contamination risk is U-shaped. Older neighborhoods often have aging infrastructure that can increase contamination risk. Areas with many new constructions might have higher contamination risk due to rapid development, temporary infrastructure, or construction-related activities.
+
+### Prediction
 
 Next, we try to determine the cutoff for the contamination risk and assess its prediction performance.
 
@@ -188,7 +361,7 @@ for(i in seq_along(thresholds)){
 best_f1 <- f1_results[which.max(f1_results$F1), ]
 best_f1
 
-pred_class <- ifelse(pred_probs > 0.33, 'Present', 'Absent')
+pred_class <- ifelse(pred_probs >= 0.31, 'Present', 'Absent')
 
 # Confusion matrix
 confusionMatrix(as.factor(pred_class), 
@@ -198,7 +371,7 @@ confusionMatrix(as.factor(pred_class),
 auc(roc_obj)
 ```
 
-The cutoff that maximizes F1 score is 0.33. The resulting model has an area under curve (AUC) of 0.6271, which is better than random guess. Overall, the model is moderately effective at predicting well contamination. It correctly identifies a fair number of contaminated wells, but it also misses some, meaning some unsafe wells could go undetected. At the same time, it classifies a number of safe wells as contaminated, which could lead to unnecessary testing or concern.
+The cutoff that maximizes F1 score is 0.31. The resulting model has an area under curve (AUC) of 0.66, which is better than random guess. Overall, the model is moderately effective at predicting well contamination. It correctly identifies a fair number of contaminated wells, but it also misses some, meaning some unsafe wells could go undetected. At the same time, it classifies a number of safe wells as contaminated, which could lead to unnecessary testing or concern.
 
 ## Test for spatial dependence
 
@@ -223,17 +396,6 @@ train_data$resid <- resid
 # Compute empirical variogram of residuals
 coordinates(train_data) <- ~ lon + lat   # makes it Spatial
 vgm_resid <- variogram(resid ~ 1, train_data)
-
-# Fit different theoretical models
-vgm_sph <- fit.variogram(vgm_resid, model = vgm("Sph"))
-vgm_exp <- fit.variogram(vgm_resid, model = vgm("Exp"))
-vgm_gau <- fit.variogram(vgm_resid, model = vgm("Gau"))
-
-# find the best model
-sse_sph <- attr(vgm_sph, "SSErr")
-sse_exp <- attr(vgm_exp, "SSErr")
-sse_gau <- attr(vgm_gau, "SSErr")
-sse_sph; sse_exp; sse_gau
 ```
 
 We assume a exponential variogram model to describe the spatial dependence, detailed as follows.
@@ -262,7 +424,7 @@ plot(vgm_resid, vgm.mod, lty = 2, type = 'b', col = 'magenta',
      main = 'Variogram (exponential model)')
 ```
 
-According to the estimation results, we see the partial sill is 0.017 and the nugget effect is 0.072. Only \\(0.017 / (0.070 + 0.017) = 20\\%\\) of the residual variance is due to spatial dependence. So, some spatial dependence exists in the residuals but they are relatively weak compared to the noise. Next, we conduct a formal statistical test for the spatial dependence using permutation test.
+According to the estimation results, we see the partial sill is 0.016 and the nugget effect is 0.080. Only \\(0.018 / (0.061 + 0.018) = 23\\%\\) of the residual variance is due to spatial dependence. So, some spatial dependence exists in the residuals but they are relatively weak compared to the noise. Next, we conduct a formal statistical test for the spatial dependence using permutation test.
 
 ```{r}
 set.seed(666)
