@@ -33,7 +33,7 @@ library(ROCit)
 library(cutpointr)
 library(rpart)
 library(rpart.plot)
-library(smotefamily)
+library(arm)
 ```
 
 ```{r, include=FALSE}
@@ -212,8 +212,32 @@ microbio_pooled <- microbio_pooled %>% mutate(Is_Western = System_Name %in% coun
 summary(microbio_pooled$risk[microbio_pooled$Is_Western == TRUE])
 summary(microbio_pooled$risk[microbio_pooled$Is_Western == FALSE])
 
-wilcox.test(microbio_pooled$risk ~ microbio_pooled$Is_Western,
-            alternative = "less")
+wilcox.test(microbio_pooled$risk ~ microbio_pooled$Is_Western, alternative = "less")
+
+ggplot(microbio_pooled) +
+  aes(x = Is_Western, y = risk, color = Is_Western) +
+  ggdist::stat_halfeye(aes(fill = Is_Western),
+                       adjust = 0.5, width = 0.6, .width = 0, 
+                       justification = -0.3) + 
+  geom_boxplot(width = .25, outlier.shape = NA) +
+  # geom_point(size = 1.5, alpha = 0.2, 
+  #            position = position_jitter(seed = 1, width = .1)) +
+  theme_minimal()
+
+summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == TRUE])
+summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == FALSE])
+
+wilcox.test(microbio_pooled_filtered$risk ~ microbio_pooled_filtered$Is_Western, alternative = "less")
+
+ggplot(microbio_pooled_filtered) +
+  aes(x = Is_Western, y = risk, color = Is_Western) +
+  ggdist::stat_halfeye(aes(fill = Is_Western),
+                       adjust = 0.5, width = 0.6, .width = 0, 
+                       justification = -0.3) + 
+  geom_boxplot(width = .25, outlier.shape = NA) +
+  # geom_point(size = 1.5, alpha = 0.2, 
+  #            position = position_jitter(seed = 1, width = .1)) +
+  theme_minimal()
 ```
 
 There is a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.0012), with samples from the western counties having a mean risk of 0.181 and non-western counties having a mean risk of 0.175.
@@ -401,8 +425,7 @@ shapiro.test(subset(microbio_pooled_affected_filtered, Ecoli_Result_Binary == "P
 There is a marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated E. coli tests (p = 0.07162).
 
 ```{r}
-wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Ecoli_Result_Binary,
-            alternative = "less")
+wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Ecoli_Result_Binary, alternative = "less")
 ```
 
 ### 2.2.1 Risk index distribution for Total Coliform in western counties
@@ -432,8 +455,7 @@ shapiro.test(subset(microbio_pooled_affected_filtered, Coliform_Result_Binary ==
 There is not marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated Total Coliform tests (p = 0.2258).
 
 ```{r}
-wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Coliform_Result_Binary,
-            alternative = "less")
+wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Coliform_Result_Binary, alternative = "less")
 ```
 
 ## 3. Logistic regression
@@ -460,6 +482,11 @@ summary(log_model_coliform)
 
 multi_log_coliform <- glm(Coliform_Result_Binary_Model ~ index_vulnerability + index_hazard + index_capacity, data = microbio_pooled_affected_filtered, family = "binomial")
 summary(multi_log_coliform)
+
+coefplot(multi_log_coliform)
+
+# capacity_log_coliform <- glm(Coliform_Result_Binary_Model ~ index_capacity, data = microbio_pooled_affected_filtered, family = "binomial")
+# summary(capacity_log_coliform)
 ```
 
 ## 4. Youden's J statistic for risk index split
@@ -483,25 +510,4 @@ summary(ecoli_cp)
 coliform_cp <- cutpointr(microbio_pooled_affected_filtered, risk, Coliform_Result_Binary_Model, direction = ">=", method = maximize_metric, metric = youden, na.rm = TRUE)
 
 summary(coliform_cp)
-```
-
-## 5. CART for risk index split
-
-The implementation below develops a decision tree model using the CART (classification and regression tree) algorithm to identify the optimal split that separates uncontaminated vs. contaminated samples. The input is the risk index from the three separate modules, as well as the overall risk index.
-
-CART for classification splits the data into smaller and smaller subsets to minimize the Gini impurity, the probability of a sample being misclassified, of the resultant subsets.
-
-```{r}
-set.seed(123)
-train_indices <- sample(1:nrow(microbio_pooled_affected_filtered), 0.8 * nrow(microbio_pooled_affected_filtered))
-train_data <- microbio_pooled_affected_filtered[train_indices, ]
-test_data <- microbio_pooled_affected_filtered[-train_indices, ]
-tree_model <- rpart(Ecoli_Result_Binary ~ risk + index_vulnerability + index_hazard + index_capacity, data = microbio_pooled_affected_filtered, method = "class", control = rpart.control(minsplit = 1))
-
-# pdf("cart.pdf")
-rpart.plot(tree_model, type = 5, extra = 101, fallen.leaves = TRUE)
-# dev.off()
-
-printcp(tree_model)
-# summary(tree_model)
 ```
