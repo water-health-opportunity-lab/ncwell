@@ -16,7 +16,7 @@ tabset: true
 
 First, we load the data below and prepare it for the analysis.
 
-```{r}
+```{r warning=FALSE}
 # load packages
 library("MASS")
 library("dplyr")

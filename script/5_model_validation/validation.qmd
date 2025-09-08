@@ -223,21 +223,6 @@ ggplot(microbio_pooled) +
   # geom_point(size = 1.5, alpha = 0.2, 
   #            position = position_jitter(seed = 1, width = .1)) +
   theme_minimal()
-
-summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == TRUE])
-summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == FALSE])
-
-wilcox.test(microbio_pooled_filtered$risk ~ microbio_pooled_filtered$Is_Western, alternative = "less")
-
-ggplot(microbio_pooled_filtered) +
-  aes(x = Is_Western, y = risk, color = Is_Western) +
-  ggdist::stat_halfeye(aes(fill = Is_Western),
-                       adjust = 0.5, width = 0.6, .width = 0, 
-                       justification = -0.3) + 
-  geom_boxplot(width = .25, outlier.shape = NA) +
-  # geom_point(size = 1.5, alpha = 0.2, 
-  #            position = position_jitter(seed = 1, width = .1)) +
-  theme_minimal()
 ```
 
 There is a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.0012), with samples from the western counties having a mean risk of 0.181 and non-western counties having a mean risk of 0.175.
@@ -373,6 +358,22 @@ start_date <- '2024-09-25'
 end_date <- '2025-03-01'
 
 microbio_pooled_filtered <- microbio_pooled %>% filter(between(Date_Collected, as.Date(start_date), as.Date(end_date)))
+
+summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == TRUE])
+summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == FALSE])
+
+wilcox.test(microbio_pooled_filtered$risk ~ microbio_pooled_filtered$Is_Western, alternative = "less")
+
+ggplot(microbio_pooled_filtered) +
+  aes(x = Is_Western, y = risk, color = Is_Western) +
+  ggdist::stat_halfeye(aes(fill = Is_Western),
+                       adjust = 0.5, width = 0.6, .width = 0, 
+                       justification = -0.3) + 
+  geom_boxplot(width = .25, outlier.shape = NA) +
+  # geom_point(size = 1.5, alpha = 0.2, 
+  #            position = position_jitter(seed = 1, width = .1)) +
+  theme_minimal()
+
 microbio_pooled_affected_filtered <- microbio_pooled_affected %>% filter(between(Date_Collected, as.Date(start_date), as.Date(end_date)))
 
 n_microbio_pooled_filtered <- nrow(microbio_pooled_filtered)
@@ -384,7 +385,8 @@ table_affected_filtered_ecoli <- table(microbio_pooled_affected_filtered$Ecoli_R
 table_filtered_coliform <- table(microbio_pooled_filtered$Coliform_Result_Binary)
 table_affected_filtered_coliform <- table(microbio_pooled_affected_filtered$Coliform_Result_Binary)
 ```
-After filtering the dates, there were `{r} n_microbio_pooled_filtered` samples in `microbio_pooled_filtered` (all locations) and `{r} n_microbio_pooled_affected_filtered` samples for `microbio_pooled_affected_filtered` (western counties).
+
+After filtering the dates, there was a significant difference the risk index of samples taking from western and non-western counties. After also filtering by western vs. non-western, there were `{r} n_microbio_pooled_filtered` samples in `microbio_pooled_filtered` (all locations) and `{r} n_microbio_pooled_affected_filtered` samples for `microbio_pooled_affected_filtered` (western counties).
 
 We observe:
 
@@ -397,6 +399,7 @@ We observe:
 -   `{r} table_affected_filtered_coliform["Absent"]` uncontaminated and `{r} table_affected_filtered_coliform["Present"]` contaminated Total Coliform samples in `microbio_pooled_affected_filtered`.
 
 Downstream analysis will be performed using `microbio_pooled_affected_filtered`.
+
 
 ### 2.1.1 Risk index distribution for E. coli in western counties
 
