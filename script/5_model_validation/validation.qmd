@@ -1,5 +1,5 @@
 ---
-title: "Validation of overall risk index using NCDHHS E. coli testing results"
+title: "Validation of overall risk index using NCDHHS well testing results for E. coli and Total Coliform"
 format: html
 toc: true
 editor: visual
@@ -12,7 +12,7 @@ tabset: true
 
 ```{r}
 # ----------------------------------------
-# R Script to validate overall risk index using NCDHHS E. coli testing results
+# R Script to validate overall risk index using NCDHHS well testing results for E. coli and Total Coliform
 # Author: Jennifer Zhang
 # Last edited: 2025-08-14
 # ----------------------------------------
