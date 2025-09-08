@@ -4,7 +4,10 @@ format: html
 toc: true
 editor: visual
 code-fold: true
+warning: false 
+message: false
 self-contained: true
+tabset: true
 ---
 
 ## Principal Component Analysis for Capacity Module
@@ -13,7 +16,7 @@ self-contained: true
 
 First, we load the data below and prepare it for the analysis.
 
-```{r, warning=FALSE}
+```{r}
 # load packages
 library("MASS")
 library("dplyr")
