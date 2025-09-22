@@ -71,6 +71,73 @@ index_subset <- index %>% filter(!is.na(county_norm) & county_norm %in% target_c
 
 
 ###### summary statistics
+
+
+##### capacity
+capacity <- st_read('nc_grid_capacity.gpkg')
+capacity <- capacity[, -c(25, 26, 28, 29)]
+dict.cap <- readxl::read_excel('Table S1.xlsx', sheet = 'Social Capacity')
+colnames(dict.cap)[2] <- 'Feature_Names'
+varname.cap <- data.frame(`Feature_Names` = colnames(capacity)[-c(1:3, 25, 26, 28, 29)])
+unit.capacity <- left_join(varname.cap, dict.cap, by = 'Feature_Names') %>% select(Feature_Names, Unit)
+
+
+##### hazard
+hazard <- st_read('nc_grid_hazard.gpkg')
+dict.hazard <- readxl::read_excel('Table S1.xlsx', sheet = 'Hazard')
+colnames(dict.hazard)[2] <- 'Feature_Names'
+varname.hazard <- data.frame(`Feature_Names` = colnames(hazard)[-c(1:2, 11)])
+unit.hazard <- left_join(varname.hazard, dict.hazard, by = 'Feature_Names') %>% select(Feature_Names, Unit)
+hazard <- hazard %>% st_drop_geometry()
+
+
+##### vulnerability
+vulnerability <- st_read('nc_grid_vulnerability_full.gpkg')
+vulnerability_process <- st_read('nc_grid_vulnerability_imputed.gpkg')
+vulnerability <- vulnerability[, which(colnames(vulnerability) %in% colnames(vulnerability_process))]
+dict.vul <- readxl::read_excel('Table S1.xlsx', sheet = 'Physical Vulnerability')
+colnames(dict.vul)[2] <- 'Feature_Names'
+varname.vul <- data.frame(`Feature_Names` = colnames(vulnerability)[-c(1:2, 66)])
+unit.vul <- left_join(varname.vul, dict.vul, by = 'Feature_Names') %>% select(Feature_Names, Unit)
+colnames(vulnerability)[1] <- 'ID'
+vulnerability <- vulnerability %>% st_drop_geometry()
+
+
+##### full data
+full <- capacity %>% st_drop_geometry() %>% left_join(hazard, by = 'grid_id') %>%
+  left_join(vulnerability, by = "grid_id")
+full <- full[, which(!(colnames(full) %in% c('ID.y', 'ID.x', 'ID')))]
+full_subset <- full[which(full$Pct_Wells == 100), ]
+
+full_subset <- full_subset %>% mutate(county_raw = str_extract(block_group_name, "[A-Za-z .'-]+ County"),
+                          county_norm = str_squish(str_to_title(county_raw)))
+full_subset <- full_subset %>% filter(!is.na(county_norm) & county_norm %in% target_counties)
+full_subset <- full_subset[, -c(96, 97)]
+
+
+### condense the categories
+KB <- full_subset$KB
+top3 <- names(sort(table(KB), decreasing = TRUE)[1:3])
+KB[which(KB %in% top3 == FALSE)] <- 'others'
+full_subset$KB <- KB
+
+surfgeo <- full_subset$surfgeo
+top2 <- names(sort(table(surfgeo), decreasing = TRUE)[c(1, 2)])
+surfgeo[which(surfgeo %in% top2 == FALSE)] <- 'others'
+full_subset$surfgeo <- surfgeo
+
+landuse <- full_subset$landuse
+landuse[which(landuse %in% c("13", "20", "40"))] <- 'cultivated'
+landuse[which(landuse %in% c("31", "32"))] <- 'developed'
+full_subset$landuse <- as.character(landuse)
+
+lith <- full_subset$lith
+top2 <- names(sort(table(lith), decreasing = TRUE)[c(1, 2)])
+lith[which(lith %in% top2 == FALSE)] <- 'others'
+full_subset$lith <- lith
+
+
+##### summary statistics
 iqr <- function(x) paste0(round(quantile(na.omit(x), .25), 2), '-', 
                           round(quantile(na.omit(x), .75), 2))
 
@@ -95,37 +162,33 @@ summ <- function(x, names) {
 ################################################################## Table S2
 
 ############################ summary statistics for vulnerability
-data_vulnerability <- st_read('nc_grid_vulnerability_imputed.gpkg')
-data_vulnerability <- data_vulnerability %>% st_drop_geometry()
-index_subset <- index_subset %>% left_join(data_vulnerability, by = "grid_id")
-vulnerability_subset <- index_subset %>% st_drop_geometry()
-vulnerability_subset <- vulnerability_subset[which(vulnerability_subset$Pct_Wells == 100), 11:73]
+vulnerability_subset <- full_subset[, 33:95]
 ## continuous variable
 num_var <- which(sapply(vulnerability_subset, class) == 'numeric')
 summary <- summ(vulnerability_subset[, num_var], 
                 names = colnames(vulnerability_subset)[num_var])
+summary$Unit <- unit.vul$Unit[num_var]
+summary$Unit[35] <- NA
 xtable(summary)
 
 ## categorical variable
-cate_var <- which(sapply(vulnerability_subset, class) != 'numeric')
-cate_var <- c(cate_var, 42)
+cate_var <- which(!sapply(vulnerability_subset, class) %in% c('numeric', 'integer'))
+cate_var <- setdiff(cate_var, 42)
 for (j in cate_var) {
   print(table(vulnerability_subset[, j]))
 }
 
-#################### hazard module
-data_hazard <- st_read('nc_grid_hazard_imputed.gpkg')
-index_subset <- index_subset %>% st_drop_geometry() %>% left_join(data_hazard, by = "grid_id")
-hazard_subset <- index_subset %>% st_drop_geometry()
-colnames(index_subset)[1] <- 'ID'
-hazard_subset <- hazard_subset[hazard_subset$Pct_Wells == 100, 75:82]
 
+
+#################### hazard module
+hazard_subset <- full_subset[, 25:32]
 ## continuous variable
 num_var <- which(sapply(hazard_subset, class) == 'numeric')
 summary <- summ(hazard_subset[, num_var], 
                 names = colnames(hazard_subset)[num_var])
-
+summary$Unit <- unit.hazard$Unit[num_var]
 xtable(summary)
+
 
 ## categorical variable
 cate_var <- which(sapply(hazard_subset, class) != 'numeric')
@@ -135,18 +198,18 @@ print(table(hazard_subset[, cate_var]))
 
 
 ############################ social capacity index
-data_capacity <- st_read('nc_grid_capacity_imputed.gpkg')
-data_capacity <- data_capacity %>% st_drop_geometry()
-index_subset <- index_subset %>% left_join(data_capacity, by = "grid_id")
-capacity_subset <- index_subset %>% st_drop_geometry()
-capacity_subset <- capacity_subset[capacity_subset$Pct_Wells == 100, 86:108]
-
+capacity_subset <- full_subset[, 3:24]
+capacity_subset <- capacity_subset[, colnames(capacity_subset) %in% unit.capacity$Feature_Names]
+for (j in 1:ncol(capacity_subset)) {
+  capacity_subset[, j] <- as.numeric(capacity_subset[, j])
+}
 ## continuous variable
-num_var <- which(sapply(capacity_subset, class) == 'numeric')
-summary <- summ(capacity_subset[, num_var], 
-                names = colnames(capacity_subset)[num_var])
-
+summary <- summ(capacity_subset, names = colnames(capacity_subset))
+summary$Unit <- unit.capacity$Unit
 xtable(summary)
+
+
+
 
 ################################################################## Table 1
 risk_summary_by_county <- index_subset %>%

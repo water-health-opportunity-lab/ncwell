@@ -69,39 +69,41 @@ index_subset$hazard_for_plot <- ifelse(is.na(index_subset$index_capacity),
                                        NA, index_subset$index_hazard)
 
 p <- ggplot() +
-  # 1) NA polygons as a discrete legend entry
+  # NA polygons
   geom_sf(data = subset(index_subset, is.na(hazard_for_plot)),
           aes(fill = "NA"), color = NA, show.legend = TRUE) +
   scale_fill_manual(name = NULL, values = c("NA" = "grey85"), breaks = "NA",
                     guide = guide_legend(order = 1, override.aes = list(color = "grey60"))) +
   
-  # Reset the fill scale so we can add the gradient for non-NA cells
   new_scale_fill() +
   
-  # 2) Non-NA polygons with the continuous gradient
+  # Non-NA polygons
   geom_sf(data = subset(index_subset, !is.na(hazard_for_plot)),
           aes(fill = hazard_for_plot), color = NA) +
   scale_fill_gradientn(colours = c("white", "red", "darkred"),
-                       name = NULL,
-                       na.value = NA,                         
+                       name = NULL, na.value = NA,
                        guide = guide_colourbar(order = 2)) +
   
-  # 3) County boundaries
+  # County boundaries
   geom_sf(data = western_counties, fill = NA, color = "black", linewidth = 0.5) +
   
-  # 4) Labels & theme
-  theme_bw() +
+  # Labels & theme
   labs(title = "Hazard index",
        x = bquote("Longitude (" * degree * "W)"),
        y = bquote("Latitude (" * degree * "N)")) +
-  theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14, face = "bold"),
-        axis.text  = element_text(size = 12, face = "bold"),
-        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
-        plot.margin = margin(t = 15, r = 15, b = 15, l = 15))
+  theme_bw() +
+  theme(
+    panel.grid   = element_blank(),
+    axis.title   = element_text(size = 22, face = "bold"),
+    axis.text    = element_text(size = 15, face = "bold"),
+    plot.title   = element_text(size = 25, face = "bold", hjust = 0.4),
+    legend.position = "bottom",
+    plot.margin  = grid::unit(c(0,0,0,0), "pt")   # no outer white space
+  ) +
+  coord_sf(expand = FALSE)
 
-
-ragg::agg_png("hazard_index_dist.png", width = 2400, height = 1400, units = "px", res = 300)
+ragg::agg_png("hazard_index_dist.png", width = 2200, height = 1600,
+              units = "px", res = 300, background = "white")
 print(p)
 dev.off()
 
@@ -143,14 +145,17 @@ p <- ggplot() +
   labs(title = "Physical vulnerability index",
        x = bquote("Longitude (" * degree * "W)"),
        y = bquote("Latitude (" * degree * "N)")) +
-  theme(panel.grid  = element_blank(),
-        axis.title  = element_text(size = 14, face = "bold"),
-        axis.text   = element_text(size = 12, face = "bold"),
-        plot.title  = element_text(size = 16, face = "bold", hjust = 0.5),
-        plot.margin = margin(t = 15, r = 15, b = 15, l = 15))
+  theme(
+    panel.grid   = element_blank(),
+    axis.title   = element_text(size = 22, face = "bold"),
+    axis.text    = element_text(size = 15, face = "bold"),
+    plot.title   = element_text(size = 25, face = "bold", hjust = 0.4),
+    legend.position = "bottom",
+    plot.margin  = grid::unit(c(0,0,0,0), "pt")   # no outer white space
+  )
 
 # Export with ragg
-ragg::agg_png("vulnerability_index_dist.png", width = 2400, height = 1400, units = "px", res = 300)
+ragg::agg_png("vulnerability_index_dist.png", width = 2200, height = 1600, units = "px", res = 300)
 print(p)
 dev.off()
 
@@ -191,14 +196,17 @@ p <- ggplot() +
   labs(title = "Social capacity index",
        x = bquote("Longitude (" * degree * "W)"),
        y = bquote("Latitude (" * degree * "N)")) +
-  theme(panel.grid  = element_blank(),
-        axis.title = element_text(size = 14, face = "bold"),
-        axis.text = element_text(size = 12, face = "bold"),
-        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
-        plot.margin = margin(t = 15, r = 15, b = 15, l = 15))
+  theme(
+    panel.grid   = element_blank(),
+    axis.title   = element_text(size = 22, face = "bold"),
+    axis.text    = element_text(size = 15, face = "bold"),
+    plot.title   = element_text(size = 25, face = "bold", hjust = 0.4),
+    legend.position = "bottom",
+    plot.margin  = grid::unit(c(0,0,0,0), "pt")   # no outer white space
+  )
 
 # Export with ragg
-ragg::agg_png("capacity_index_dist.png", width = 2400, height = 1400, units = "px", res = 300)
+ragg::agg_png("capacity_index_dist.png", width = 2200, height = 1600, units = "px", res = 300)
 print(p)
 dev.off()
 
