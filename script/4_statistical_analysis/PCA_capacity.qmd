@@ -4,7 +4,10 @@ format: html
 toc: true
 editor: visual
 code-fold: true
+warning: false 
+message: false
 self-contained: true
+tabset: true
 ---
 
 ## Principal Component Analysis for Capacity Module
@@ -13,7 +16,7 @@ self-contained: true
 
 First, we load the data below and prepare it for the analysis.
 
-```{r, warning=FALSE}
+```{r warning=FALSE}
 # load packages
 library("MASS")
 library("dplyr")
@@ -29,36 +32,39 @@ library("cluster")
 library("mclust")
 
 # read data
-data <- st_read('nc_grid_capacity_imputed.gpkg')
+capacity <- st_read('nc_grid_capacity_imputed.gpkg')
+vulnerability <- st_drop_geometry(st_read('nc_grid_vulnerability_imputed.gpkg'))
+
+pct_wells <- vulnerability[, c(2, 44)]
+data <- pct_wells %>% 
+  left_join(capacity, by = "grid_id") %>%
+  filter(Pct_Wells == 100)
 
 # total sample size
 (n <- nrow(data))
 
 # dimension
-(p <- ncol(data) - 4)
+(p <- ncol(data) - 5)
 
 # make sure variables are numeric
-for (j in 4:26) {
+for (j in 5:27) {
   data[[j]] <- as.numeric(data[[j]])
 }
 
-
 ### drop the location information for easier modeling
-data_no_loc <- st_drop_geometry(data)
-data_no_loc <- data_no_loc[, -(1:3)]
+data_no_loc <- data[, -(28)] # st_drop_geometry(data)
+data_no_loc <- data_no_loc[, -(1:4)]
 
-### drop female
-data_no_loc <- data_no_loc[, -which(colnames(data_no_loc) == 'pct_women')]
+### drop pct_women, pct_single_parent, pct_under_17, pct_women_gave_birth, pct_us_born, pct_active_commuting, pct_no_move, pct_crowded_housing
+data_no_loc <- data_no_loc[, -which(colnames(data_no_loc) %in% c('pct_women', 'pct_single_parent', 'pct_under_17', 'pct_women_gave_birth', 'pct_us_born', 'pct_active_commuting', 'pct_no_move', 'pct_crowded_housing', 'pct_no_computer', 'housing_units_density'))]
 
 ### Scale the data
 scaled_data <- scale(data_no_loc)
-colnames(scaled_data) <- c('Poverty status', 'Pregnancy', 'Health insurance',
-                           'Nativity', 'Lack of Geographical mobility', 'Government jobs',
-                           'Minority', 'Lack of English proficiency', 'Single-parent', 
-                           'Unemployment', 'Education', 'Seniors', 
-                           'Youth', 'Homeownership rate', 'Active commuting', 
-                           'Crowded housing', 'Plumbing', 'Home age', 'No Vehicle ownership',
-                           'No Internet', 'No Computer', 'Housing units')
+colnames(scaled_data) <- c('Poverty status', 'Health insurance', 'Government jobs',
+                           'Minority', 'Lack of English proficiency', 
+                           'Unemployment', 'Lack of education', 'Seniors', 
+                           'Homeownership rate', 'Plumbing',
+                           'Home age', 'No vehicle', 'No Internet')
 ```
 
 ### 2. PCA and Index Construction
@@ -81,8 +87,7 @@ fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
   )
 ```
 
-In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 14.1% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
-
+In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 18.2% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
 
 Before constructing the index, let us first make sure the directionality of the variables is correct. To make the PCs more interpretable, we apply the varimax rotation to the loadings, which maximizes the variance of the loadings within each factor. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted.
 
@@ -90,10 +95,10 @@ Before constructing the index, let us first make sure the directionality of the 
 ###### flip the signs
 
 ## directionality
-directionality <- c(-1, NA, 1, NA, NA, 1, 
-                    -1, -1, -1, -1, -1, 
-                    -1, -1, 1, 1, -1, 1,
-                    1, -1, -1, -1, 1)
+directionality <- c(-1, 1, 1, -1, -1, -1, 
+                    -1, -1, 1, 1, 1, 
+                    -1, -1)
+
 ## flip the sign
 p <- ncol(scaled_data)
 ## varimax rotation
@@ -111,43 +116,42 @@ for (j in 1:p) {
 PCs <- scaled_data %*% rot
 
 ## interpretation of the first 5 PCs
-# PC1 (increase the capacity) (urban, dense, well-developed)
-## poverty (-), pregnancy (-), housing units (+), no computer (-)
+# PC1 (increase the capacity) (wealthier, English proficiency, smaller senior population, plumbed homes, own vehicles)
+## poverty (-), lack of English (-), seniors (-), plumbing (+), no vehicle (-)
 w1 <- round(rot[, 1], 2)
 w1[which(abs(w1) > 0.3)]
 
-# PC2 (increase the capacity) (young, has internet, educated, not poor)
-## nativity (+), pregnancy (+), plumbing (+), internet (-), no vehicle ownship (-)
+# PC2 (increase the capacity) (health insured, government employment, English proficiency, college education, smaller senior population, plumbed homes)
+## health insurance (+), government jobs (+), lack of English (-), lack of education (-), seniors (-), plumbing (+)
 w2 <- round(rot[, 2], 2)
 w2[which(abs(w2) > 0.3)]
 
 # PC3 (positive effects on capacity) 
-## (bike friently, access to computer, young, health insured)
-## health insurance (+), housing units, computer (-)
+## (health insured, government employment, new home, internet)
+## health insurance (+), government jobs (+), new homes (+), no internet (-)
 w3 <- round(rot[, 3], 2)
 w3[which(abs(w3) > 0.3)]
 
 # PC4 (positive effects on capacity) 
-## (not poor, US citizens, adult, with cars, access to internet)
-## poverty (-), nativity (+), youth (-), vehicle ownership (-), internet (-), active computing (+)
+## (government employment, smaller minority population, low unemployment, attended college)
+## government jobs (+), minority (-), unemployment (-), lack of education (-)
 w4 <- round(rot[, 4], 2)
 w4[which(abs(w4) > 0.3)]
 
 # PC5 (positive effects on capacity) 
-## stable resident, english profient, family, more young
-## geographical mobility (+), government jobs (+), lack of english proficiency 
-## single parent (-), youth (-)
+## (English proficiency, owned homes)
+## lack of English (-), homeownership rate (+)
 w5 <- round(rot[, 5], 2)
 w5[which(abs(w5) > 0.3)]
 ```
 
 We can interpret those PCs in the following way. If a region has higher values of
 
-1.  PC1, it is more urban, dense, well-developed, and with access to computer.
-2.  PC2, it has more US-born population with more access to internet, plumbing and vehicle ownership but more pregnant women.
-3.  PC3, it has more access to health services, computer, and available housing.
-4.  PC4, it has more native and richer population, more adults, digitally connected, mobile population (with cars) with active commuting. It appears to capture more metropolitan areas
-5.  PC5, it has more stable employment in government jobs, less migration, fewer language, family, and age-based vulnerabilities
+1.  PC1, it has wealthier individuals with more English proficiency, plumbed homes, vehicle ownership, and a smaller senior population.
+2.  PC2, it has more individuals with health insurance, government employment, English proficiency, college education, plumbed homes, and a smaller senior population.
+3.  PC3, it has more individuals with health insurance, government employment, new homes, and internet.
+4.  PC4, it has more government employment, overall employment, college education, and a smaller minority population.
+5.  PC5, it has more individuals with English proficiency and owned homes.
 
 To interpret this PC, let us visualize the content of the first two PCs in terms of their contribution. For variable $j$ and PC $k$, the contribution of variable $j$ is defined as
 
@@ -208,7 +212,6 @@ ggplot(df, aes(x = 0, y = 0)) +
 
 So, we can observe that plumbing, pregnancy, and housing units are the contributing variables to the index of capacity module in terms of the first two PCs. Next, we visualize the raw distribution of the index, which turns out to be highly left-skewed. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
 
-
 ```{r}
 ## raw distribution of the index
 index <- apply(PCs, 1, mean)
@@ -230,7 +233,6 @@ st_write(data[, c(1, 2, 3, 28)], 'index_capacity.gpkg',
 ```
 
 To make the results more interpretable, we can compute the contribution of the variables below. Note that Pregnancy, Nativity, Youth, Plumbing, No Computer, and Housing units are the variables with high contribution.
-
 
 ```{r}
 # Compute squared loadings
@@ -305,6 +307,7 @@ custom_colors <- c(
 library(leaflet)
 
 # transform the coordinates into longitude and latitude
+data <- st_as_sf(data)
 data_lonlat <- st_transform(data, crs = 4326)
 
 # Define palettes
@@ -319,13 +322,38 @@ pal_index <- colorNumeric(
   na.color = "grey"
 )
 
+county_outlines <- 
+  tigris::counties(cb = TRUE) %>%
+  filter(STATE_NAME == "North Carolina")
+```
+
+```{r}
 # Interactive leaflet map
 ### subset
 data_henderson <- data_lonlat[which(grepl("Henderson County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
 
 # Interactive leaflet map
 leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
+  setView(-82.4319, 35.3, zoom = 10) %>%
+  
   addTiles() %>%
+  
+  # County lines
+  addPolygons(
+    data = county_outlines,
+    color = "black",
+    fillColor = "#cccccc",
+    weight = 1,
+    opacity = .5,
+    fillOpacity = .35,
+    highlightOptions = 
+      highlightOptions(
+        color = "black",
+        weight = 3,
+        bringToFront = FALSE
+      ),
+    label = ~NAME
+  ) %>%
   
   # Cluster layer
   addPolygons(
@@ -353,7 +381,7 @@ leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
     overlayGroups = c("Cluster", "Index"),
     options = layersControlOptions(collapsed = FALSE)
   ) %>%
-  
+
   addControl(
     html = "<strong>Showing: Henderson County</strong>",
     position = "bottomleft"
@@ -369,7 +397,26 @@ data_buncombe <- data_lonlat[which(grepl("Buncombe County", data$block_group_nam
 
 # Interactive leaflet map
 leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
+  setView(-82.4753, 35.6, zoom = 10) %>%
+  
   addTiles() %>%
+  
+  # County lines
+  addPolygons(
+    data = county_outlines,
+    color = "black",
+    fillColor = "#cccccc",
+    weight = 1,
+    opacity = .5,
+    fillOpacity = .35,
+    highlightOptions = 
+      highlightOptions(
+        color = "black",
+        weight = 3,
+        bringToFront = FALSE
+      ),
+    label = ~NAME
+  ) %>%
   
   # Cluster layer
   addPolygons(
@@ -413,7 +460,26 @@ data_watauga <- data_lonlat[which(grepl("Watauga County", data$block_group_name,
 
 # Interactive leaflet map
 leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
+  setView(-81.7349, 36.1942, zoom = 10) %>%
+  
   addTiles() %>%
+  
+  # County lines
+  addPolygons(
+    data = county_outlines,
+    color = "black",
+    fillColor = "#cccccc",
+    weight = 1,
+    opacity = .5,
+    fillOpacity = .35,
+    highlightOptions = 
+      highlightOptions(
+        color = "black",
+        weight = 3,
+        bringToFront = FALSE
+      ),
+    label = ~NAME
+  ) %>%
   
   # Cluster layer
   addPolygons(
@@ -456,7 +522,26 @@ data_wake <- data_lonlat[which(grepl("Wake County", data$block_group_name, ignor
 
 # Interactive leaflet map
 leaflet(data_wake, options = leafletOptions(minZoom = 7)) %>%
+  setView(-78.6, 35.8032, zoom = 9) %>%
+  
   addTiles() %>%
+  
+  # County lines
+  addPolygons(
+    data = county_outlines,
+    color = "black",
+    fillColor = "#cccccc",
+    weight = 1,
+    opacity = .5,
+    fillOpacity = .35,
+    highlightOptions = 
+      highlightOptions(
+        color = "black",
+        weight = 3,
+        bringToFront = FALSE
+      ),
+    label = ~NAME
+  ) %>%  
   
   # Cluster layer
   addPolygons(
@@ -494,7 +579,26 @@ data_mecklenburg <- data_lonlat[which(grepl("Mecklenburg County", data$block_gro
 
 # Interactive leaflet map
 leaflet(data_mecklenburg, options = leafletOptions(minZoom = 7)) %>%
+  setView(-80.8544, 35.2633, zoom = 9) %>%
+  
   addTiles() %>%
+  
+  # County lines
+  addPolygons(
+    data = county_outlines,
+    color = "black",
+    fillColor = "#cccccc",
+    weight = 1,
+    opacity = .5,
+    fillOpacity = .35,
+    highlightOptions = 
+      highlightOptions(
+        color = "black",
+        weight = 3,
+        bringToFront = FALSE
+      ),
+    label = ~NAME
+  ) %>%
   
   # Cluster layer
   addPolygons(
