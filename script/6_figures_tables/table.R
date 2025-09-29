@@ -92,12 +92,14 @@ hazard <- hazard %>% st_drop_geometry()
 
 ##### vulnerability
 vulnerability <- st_read('nc_grid_vulnerability_926.gpkg')
+vulnerability$weg_int <- as.factor(round(vulnerability$weg_int))
+vulnerability$hydgrp_int <- as.factor(round(vulnerability$hydgrp_int))
 vulnerability_process <- st_read('nc_grid_vulnerability_imputed.gpkg')
 vulnerability <- vulnerability[, which(colnames(vulnerability) %in% colnames(vulnerability_process))]
 vulnerability <- vulnerability[, -which(colnames(vulnerability) == 'HUC_12')]
 dict.vul <- readxl::read_excel('Table S1.xlsx', sheet = 'Physical Vulnerability')
 colnames(dict.vul)[2] <- 'Feature_Names'
-varname.vul <- data.frame(`Feature_Names` = colnames(vulnerability)[-c(1, 65)])
+varname.vul <- data.frame(`Feature_Names` = colnames(vulnerability)[-c(1, 2, 66)])
 unit.vul <- left_join(varname.vul, dict.vul, by = 'Feature_Names') %>% select(Feature_Names, Unit)
 vulnerability <- vulnerability %>% st_drop_geometry()
 

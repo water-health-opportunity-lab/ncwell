@@ -35,7 +35,7 @@ library("mclust")
 capacity <- st_read('nc_grid_capacity_imputed.gpkg')
 vulnerability <- st_drop_geometry(st_read('nc_grid_vulnerability_imputed.gpkg'))
 
-pct_wells <- vulnerability[, c(2, 44)]
+pct_wells <- vulnerability[, c(2, 6)]
 data <- pct_wells %>% 
   left_join(capacity, by = "grid_id") %>%
   filter(Pct_Wells == 100)
@@ -87,7 +87,7 @@ fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
   )
 ```
 
-In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 18.2% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
+In the literature, the most common way to construct an index using PCA is to use the 1st PC. However, in our case, the 1st PC only explained 14.1% of the variance. So, I would suggest using weighted average of the PCs, where the weights can be determined based on expert opinions.
 
 Before constructing the index, let us first make sure the directionality of the variables is correct. To make the PCs more interpretable, we apply the varimax rotation to the loadings, which maximizes the variance of the loadings within each factor. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted.
 
@@ -128,7 +128,7 @@ w2[which(abs(w2) > 0.3)]
 
 # PC3 (positive effects on capacity) 
 ## (health insured, government employment, new home, internet)
-## health insurance (+), government jobs (+), new homes (+), no internet (-)
+## health insurance (+), government jobs (+), home age (+), no internet (-)
 w3 <- round(rot[, 3], 2)
 w3[which(abs(w3) > 0.3)]
 
@@ -210,7 +210,9 @@ ggplot(df, aes(x = 0, y = 0)) +
        x = "Rotated PC1", y = "Rotated PC2", color = "Contribution")
 ```
 
-So, we can observe that plumbing, pregnancy, and housing units are the contributing variables to the index of capacity module in terms of the first two PCs. Next, we visualize the raw distribution of the index, which turns out to be highly left-skewed. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
+So, we can observe that plumbing, pregnancy, and housing units are the contributing variables to the index of capacity module in terms of the first two PCs.
+
+Next, we visualize the raw distribution of the index, which turns out to be highly left-skewed. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
 
 ```{r}
 ## raw distribution of the index
@@ -228,7 +230,7 @@ index <- (index - min(index)) / (max(index) - min(index))
 index <- index ^ (as.numeric(lambda))
 data$index <- index
 
-st_write(data[, c(1, 2, 3, 28)], 'index_capacity.gpkg',
+st_write(data[, c(1, 2, 4, 29, 28)], 'index_capacity.gpkg',
          layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
 
@@ -249,6 +251,51 @@ print(cont)
 cont[which(cont > 30)]
 ```
 
+Next, we visualize the sum of squared loadings of the ten most important variables (measured in terms of Contribution) in a barplot below.
+
+```{r}
+idx <- order(cont, decreasing = TRUE)[1:10]   # get top 3 directly
+var_names <- names(cont)[idx]
+var_names[which(directionality[idx] == -1)] <- paste0(var_names[which(directionality[idx] == -1)], ' *')
+cont.subset <- cont[idx]
+print(range(cont))
+print(mean(cont))
+
+
+# Create a data frame for plotting
+df <- data.frame(Variable = var_names, cont.subset = cont.subset)
+
+p <- ggplot(df, aes(x = reorder(Variable, cont.subset), y = cont.subset, fill = cont.subset)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  scale_fill_gradient2(
+    low = "white", high = "darkgreen",
+    name = "Contribution (%)"   # legend title
+  ) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +  # add % to tick labels
+  coord_flip() +
+  labs(
+    title = "Contribution in the social capacity module",
+    x = "Variable",
+    y = "Contribution (%)"       # axis title
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y  = element_text(color = "black", size = 16, face = "bold"),
+    axis.text.x  = element_text(color = "black", size = 16),
+    axis.title.x = element_text(color = "black", face = "bold", size = 16),
+    axis.title.y = element_text(color = "black", face = "bold", size = 16),
+    plot.title   = element_text(color = "black", face = "bold",
+                                hjust = 0.5, size = 20),
+    legend.title = element_text(color = "black", face = "bold", size = 14),
+    legend.text  = element_text(size = 12, color = "black")
+  )
+
+ggsave(filename = "capacity_import.png",
+       plot = p,
+       width = 3000, height = 1400, units = "px",
+       dpi = 300, device = ragg::agg_png)
+```
+
 It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
 
 ```{r}
@@ -259,6 +306,7 @@ hist(index, col = 'white', border = 'magenta',
 boxplot(index, col = 'white', 
         border = 'magenta', xlab = '',
         main = 'Index for Capacity')
+
 ```
 
 ### 3. Visualization and Validation of the Index
@@ -322,38 +370,13 @@ pal_index <- colorNumeric(
   na.color = "grey"
 )
 
-county_outlines <- 
-  tigris::counties(cb = TRUE) %>%
-  filter(STATE_NAME == "North Carolina")
-```
-
-```{r}
 # Interactive leaflet map
 ### subset
 data_henderson <- data_lonlat[which(grepl("Henderson County", data$block_group_name, ignore.case = TRUE) == TRUE), ]
 
 # Interactive leaflet map
 leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
-  setView(-82.4319, 35.3, zoom = 10) %>%
-  
   addTiles() %>%
-  
-  # County lines
-  addPolygons(
-    data = county_outlines,
-    color = "black",
-    fillColor = "#cccccc",
-    weight = 1,
-    opacity = .5,
-    fillOpacity = .35,
-    highlightOptions = 
-      highlightOptions(
-        color = "black",
-        weight = 3,
-        bringToFront = FALSE
-      ),
-    label = ~NAME
-  ) %>%
   
   # Cluster layer
   addPolygons(
@@ -381,7 +404,7 @@ leaflet(data_henderson, options = leafletOptions(minZoom = 7)) %>%
     overlayGroups = c("Cluster", "Index"),
     options = layersControlOptions(collapsed = FALSE)
   ) %>%
-
+  
   addControl(
     html = "<strong>Showing: Henderson County</strong>",
     position = "bottomleft"
@@ -397,26 +420,7 @@ data_buncombe <- data_lonlat[which(grepl("Buncombe County", data$block_group_nam
 
 # Interactive leaflet map
 leaflet(data_buncombe, options = leafletOptions(minZoom = 7)) %>%
-  setView(-82.4753, 35.6, zoom = 10) %>%
-  
   addTiles() %>%
-  
-  # County lines
-  addPolygons(
-    data = county_outlines,
-    color = "black",
-    fillColor = "#cccccc",
-    weight = 1,
-    opacity = .5,
-    fillOpacity = .35,
-    highlightOptions = 
-      highlightOptions(
-        color = "black",
-        weight = 3,
-        bringToFront = FALSE
-      ),
-    label = ~NAME
-  ) %>%
   
   # Cluster layer
   addPolygons(
@@ -460,26 +464,7 @@ data_watauga <- data_lonlat[which(grepl("Watauga County", data$block_group_name,
 
 # Interactive leaflet map
 leaflet(data_watauga, options = leafletOptions(minZoom = 7)) %>%
-  setView(-81.7349, 36.1942, zoom = 10) %>%
-  
   addTiles() %>%
-  
-  # County lines
-  addPolygons(
-    data = county_outlines,
-    color = "black",
-    fillColor = "#cccccc",
-    weight = 1,
-    opacity = .5,
-    fillOpacity = .35,
-    highlightOptions = 
-      highlightOptions(
-        color = "black",
-        weight = 3,
-        bringToFront = FALSE
-      ),
-    label = ~NAME
-  ) %>%
   
   # Cluster layer
   addPolygons(
@@ -522,26 +507,7 @@ data_wake <- data_lonlat[which(grepl("Wake County", data$block_group_name, ignor
 
 # Interactive leaflet map
 leaflet(data_wake, options = leafletOptions(minZoom = 7)) %>%
-  setView(-78.6, 35.8032, zoom = 9) %>%
-  
   addTiles() %>%
-  
-  # County lines
-  addPolygons(
-    data = county_outlines,
-    color = "black",
-    fillColor = "#cccccc",
-    weight = 1,
-    opacity = .5,
-    fillOpacity = .35,
-    highlightOptions = 
-      highlightOptions(
-        color = "black",
-        weight = 3,
-        bringToFront = FALSE
-      ),
-    label = ~NAME
-  ) %>%  
   
   # Cluster layer
   addPolygons(
@@ -579,26 +545,7 @@ data_mecklenburg <- data_lonlat[which(grepl("Mecklenburg County", data$block_gro
 
 # Interactive leaflet map
 leaflet(data_mecklenburg, options = leafletOptions(minZoom = 7)) %>%
-  setView(-80.8544, 35.2633, zoom = 9) %>%
-  
   addTiles() %>%
-  
-  # County lines
-  addPolygons(
-    data = county_outlines,
-    color = "black",
-    fillColor = "#cccccc",
-    weight = 1,
-    opacity = .5,
-    fillOpacity = .35,
-    highlightOptions = 
-      highlightOptions(
-        color = "black",
-        weight = 3,
-        bringToFront = FALSE
-      ),
-    label = ~NAME
-  ) %>%
   
   # Cluster layer
   addPolygons(

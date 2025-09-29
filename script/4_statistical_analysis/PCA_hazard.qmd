@@ -201,6 +201,7 @@ data$index <- index
 st_write(data[, c(1, 2, 11, 13)], 'index_hazard.gpkg',
          layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
+
 Let us tentatively use positive weights for those 5 PCs. To make the results more interpretable, we can compute the contribution of the variables below. Note that Satelite-based inundation map, Superfund, CAFOs, and FEMA Floodplain are the variables with high contribution.
 
 ```{r}
@@ -216,6 +217,48 @@ contrib <- sweep(squared_loadings, 2,
 cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
 print(cont)
 cont[which(cont > 60)]
+```
+
+```{r}
+idx <- order(cont, decreasing = TRUE)[1:8]
+var_names <- names(cont)[idx]
+cont.subset <- cont[idx]
+print(range(cont))
+print(mean(cont))
+
+# Create a data frame for plotting
+df <- data.frame(Variable = var_names, cont.subset = cont.subset)
+
+p <- ggplot(df, aes(x = reorder(Variable, cont.subset), y = cont.subset, fill = cont.subset)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  scale_fill_gradient2(
+    low = "white", high = "red",
+    name = "Contribution (%)"   # legend title
+  ) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +  # add % to tick labels
+  coord_flip() +
+  labs(
+    title = "Contribution in the hazard module",
+    x = "Variable",
+    y = "Contribution (%)"       # axis title
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y  = element_text(color = "black", size = 16, face = "bold"),
+    axis.text.x  = element_text(color = "black", size = 16),
+    axis.title.x = element_text(color = "black", face = "bold", size = 16),
+    axis.title.y = element_text(color = "black", face = "bold", size = 16),
+    plot.title   = element_text(color = "black", face = "bold",
+                                hjust = 0.5, size = 20),
+    legend.title = element_text(color = "black", face = "bold", size = 14),
+    legend.text  = element_text(size = 12, color = "black")
+  )
+
+
+ggsave(filename = "hazard_import.png",
+       plot = p,
+       width = 3000, height = 1400, units = "px",
+       dpi = 300, device = ragg::agg_png)
 ```
 
 It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
