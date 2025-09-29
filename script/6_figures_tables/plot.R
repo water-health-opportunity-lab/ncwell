@@ -27,14 +27,14 @@ index_hazard <- st_read('index_hazard.gpkg')
 ############################################# data manipulation
 colnames(index_capacity)[4] <- 'index_capacity'
 colnames(index_hazard)[4] <- 'index_hazard'
-colnames(index_vulnerability)[4] <- 'index_vulnerability'
+colnames(index_vulnerability)[3] <- 'index_vulnerability'
 
 ############################################# merging
 index <- index_vulnerability %>% st_drop_geometry() %>% 
   left_join(index_hazard, by = "grid_id") %>%
   left_join(index_capacity, by = "grid_id")
-index <- index[, c(1, 2, 3, 4, 7, 11, 8)]
-colnames(index)[c(1, 3, 7)] <- c('ID', 'block_group_name', 'geom')
+index <- index[, c(1, 2, 5, 8, 3, 6, 10, 7)]
+colnames(index)[c(1, 3, 8)] <- c('ID', 'block_group_name', 'geom')
 index <- st_as_sf(index, sf_column_name = "geom")
 
 #############################################  risk score computation
