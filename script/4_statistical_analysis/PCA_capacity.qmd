@@ -246,9 +246,9 @@ contrib <- sweep(squared_loadings, 2,
                  colSums(squared_loadings), FUN = "/")
 
 # View contribution
-cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
-print(cont)
-cont[which(cont > 30)]
+cont <- round(apply(contrib[, 1:5], 1, sum), 2)
+cont <- cont / sum(cont) * 100
+cont[order(cont, decreasing = TRUE)[1:10]]
 ```
 
 Next, we visualize the sum of squared loadings of the ten most important variables (measured in terms of Contribution) in a barplot below.
@@ -256,6 +256,7 @@ Next, we visualize the sum of squared loadings of the ten most important variabl
 ```{r}
 idx <- order(cont, decreasing = TRUE)[1:10]   # get top 3 directly
 var_names <- names(cont)[idx]
+var_names[c(1, 2, 3, 5, 8, 9)] <- c('Lack of English Proficiency', 'Government Jobs', 'Lack of Education', 'No Vehicle', 'Poverty Status', 'Health Insurance')
 var_names[which(directionality[idx] == -1)] <- paste0(var_names[which(directionality[idx] == -1)], ' *')
 cont.subset <- cont[idx]
 print(range(cont))
@@ -274,20 +275,21 @@ p <- ggplot(df, aes(x = reorder(Variable, cont.subset), y = cont.subset, fill = 
   scale_y_continuous(labels = function(x) paste0(x, "%")) +  # add % to tick labels
   coord_flip() +
   labs(
-    title = "Contribution in the social capacity module",
+    title = "Social Capacity Module",
     x = "Variable",
     y = "Contribution (%)"       # axis title
   ) +
   theme_minimal(base_size = 14) +
   theme(
-    axis.text.y  = element_text(color = "black", size = 16, face = "bold"),
-    axis.text.x  = element_text(color = "black", size = 16),
-    axis.title.x = element_text(color = "black", face = "bold", size = 16),
-    axis.title.y = element_text(color = "black", face = "bold", size = 16),
+    axis.text.y  = element_text(color = "black", size = 18, face = "bold"),
+    axis.text.x  = element_text(color = "black", size = 18),
+    axis.title.x = element_text(color = "black", face = "bold", size = 18),
+    axis.title.y = element_text(color = "black", face = "bold", size = 18),
     plot.title   = element_text(color = "black", face = "bold",
-                                hjust = 0.5, size = 20),
-    legend.title = element_text(color = "black", face = "bold", size = 14),
-    legend.text  = element_text(size = 12, color = "black")
+                                hjust = 0.5, size = 22),
+    legend.title = element_text(color = "black", face = "bold", size = 18),
+    legend.text  = element_text(size = 12, color = "black"),
+    legend.position = "none"
   )
 
 ggsave(filename = "capacity_import.png",
