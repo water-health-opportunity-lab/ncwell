@@ -15,11 +15,6 @@ library("stringr")
 library("tigris")
 library("tidyverse")
 library("ggnewscale")
-library('xtable')
-library("dplyr")
-library("officer")
-library("flextable")
-library("stringr")
 
 ############################################# set working directory
 setwd('~/Desktop/Research/Contamination risk/')
@@ -91,15 +86,17 @@ hazard <- hazard %>% st_drop_geometry()
 
 
 ##### vulnerability
-vulnerability <- st_read('nc_grid_vulnerability_926.gpkg')
+vulnerability <- st_read('nc_grid_vulnerability_929.gpkg')
+vulnerability$drainage_class_int <- as.factor(round(vulnerability$drainage_class_int))
+vulnerability$str_int <- as.factor(round(vulnerability$str_int))
 vulnerability$weg_int <- as.factor(round(vulnerability$weg_int))
 vulnerability$hydgrp_int <- as.factor(round(vulnerability$hydgrp_int))
+vulnerability <- vulnerability %>% select(-matches("A_"))
 vulnerability_process <- st_read('nc_grid_vulnerability_imputed.gpkg')
 vulnerability <- vulnerability[, which(colnames(vulnerability) %in% colnames(vulnerability_process))]
-vulnerability <- vulnerability[, -which(colnames(vulnerability) == 'HUC_12')]
 dict.vul <- readxl::read_excel('Table S1.xlsx', sheet = 'Physical Vulnerability')
 colnames(dict.vul)[2] <- 'Feature_Names'
-varname.vul <- data.frame(`Feature_Names` = colnames(vulnerability)[-c(1, 2, 66)])
+varname.vul <- data.frame(`Feature_Names` = colnames(vulnerability)[-c(1, 2, 50)])
 unit.vul <- left_join(varname.vul, dict.vul, by = 'Feature_Names') %>% select(Feature_Names, Unit)
 vulnerability <- vulnerability %>% st_drop_geometry()
 
@@ -113,7 +110,7 @@ full_subset <- full[which(full$Pct_Wells == 100), ]
 full_subset <- full_subset %>% mutate(county_raw = str_extract(block_group_name, "[A-Za-z .'-]+ County"),
                           county_norm = str_squish(str_to_title(county_raw)))
 full_subset <- full_subset %>% filter(!is.na(county_norm) & county_norm %in% target_counties)
-full_subset <- full_subset[, -c(96, 97)]
+full_subset <- full_subset[, -c(80, 81)]
 
 
 ### condense the categories
@@ -188,9 +185,9 @@ summ <- function(x, names) {
 ################################################################## Table S2
 
 ############################ summary statistics for vulnerability
-vulnerability_subset <- full_subset[, 33:95]
+vulnerability_subset <- full_subset[, 33:79]
 ## continuous variable
-num_var <- which(sapply(vulnerability_subset, class) == 'numeric')
+num_var <- which(sapply(vulnerability_subset, class) %in% c('numeric', 'integer'))
 summary <- summ(vulnerability_subset[, num_var], 
                 names = colnames(vulnerability_subset)[num_var])
 summary$Unit <- unit.vul$Unit[num_var]
@@ -199,6 +196,7 @@ xtable(summary)
 
 ## categorical variable
 cate_var <- which(!sapply(vulnerability_subset, class) %in% c('numeric', 'integer'))
+colnames(vulnerability_subset)[cate_var]
 for (j in cate_var) {
   print(table(vulnerability_subset[, j]))
 }
@@ -237,6 +235,8 @@ xtable(summary)
 
 
 ################################################################## Table 1
+library('flextable')
+library('officer')
 risk_summary_by_county <- index_subset %>% st_drop_geometry() %>%
   group_by(county_norm) %>%
   summarise(
@@ -262,8 +262,9 @@ doc <- read_docx() %>%
 print(doc, target = "risk_summary_by_county.docx")
 
 
-# needs: library(dplyr); library(rlang); library(stringr)
-
+# needs: library("dplyr"); library("rlang"); library("stringr")
+library("rlang")
+library("stringr")
 summarise_index <- function(data, county_col, value_col) {
   county_sym <- rlang::ensym(county_col)
   value_sym  <- rlang::ensym(value_col)
@@ -353,5 +354,5 @@ make_table_S2_latex <- function(index_subset, file = NULL) {
 }
 
 # usage:
-# latex_code <- make_table_S2_latex(index_subset, file = "Table_S2_by_module.tex")
-# cat(latex_code)
+latex_code <- make_table_S2_latex(index_subset, file = "Table_S2_by_module.tex")
+cat(latex_code)
