@@ -27,14 +27,14 @@ index_hazard <- st_read('index_hazard.gpkg')
 ############################################# data manipulation
 colnames(index_capacity)[4] <- 'index_capacity'
 colnames(index_hazard)[4] <- 'index_hazard'
-colnames(index_vulnerability)[4] <- 'index_vulnerability'
+colnames(index_vulnerability)[3] <- 'index_vulnerability'
 
 ############################################# merging
 index <- index_vulnerability %>% st_drop_geometry() %>% 
   left_join(index_hazard, by = "grid_id") %>%
   left_join(index_capacity, by = "grid_id")
-index <- index[, c(1, 2, 3, 4, 7, 11, 8)]
-colnames(index)[c(1, 3, 7)] <- c('ID', 'block_group_name', 'geom')
+index <- index[, c(1, 2, 5, 8, 3, 6, 10, 7)]
+colnames(index)[c(1, 3, 8)] <- c('ID', 'block_group_name', 'geom')
 index <- st_as_sf(index, sf_column_name = "geom")
 
 #############################################  risk score computation
@@ -67,40 +67,64 @@ index_subset <- index %>% filter(!is.na(county_norm) & county_norm %in% target_c
 ############################################# Hazard index (Figure 2)
 index_subset$hazard_for_plot <- ifelse(is.na(index_subset$index_capacity),
                                        NA, index_subset$index_hazard)
-
 p <- ggplot() +
   # NA polygons
   geom_sf(data = subset(index_subset, is.na(hazard_for_plot)),
           aes(fill = "NA"), color = NA, show.legend = TRUE) +
-  scale_fill_manual(name = NULL, values = c("NA" = "grey85"), breaks = "NA",
-                    guide = guide_legend(order = 1, override.aes = list(color = "grey60"))) +
+  scale_fill_manual(
+    name = NULL,
+    values = c("NA" = "grey85"),
+    breaks = "NA",
+    guide = guide_legend(order = 1, override.aes = list(fill = "grey85"))
+  ) +
   
   new_scale_fill() +
   
   # Non-NA polygons
   geom_sf(data = subset(index_subset, !is.na(hazard_for_plot)),
           aes(fill = hazard_for_plot), color = NA) +
-  scale_fill_gradientn(colours = c("white", "red", "darkred"),
-                       name = NULL, na.value = NA,
-                       guide = guide_colourbar(order = 2)) +
+  scale_fill_gradientn(
+    colours = c("white", "red", "darkred"),
+    name = NULL, na.value = NA,
+    guide = guide_colourbar(
+      order = 2,
+      barwidth = 18,   # make the color bar longer
+      barheight = 0.6
+    )
+  ) +
   
   # County boundaries
   geom_sf(data = western_counties, fill = NA, color = "black", linewidth = 0.5) +
   
   # Labels & theme
-  labs(title = "Hazard index",
-       x = bquote("Longitude (" * degree * "W)"),
-       y = bquote("Latitude (" * degree * "N)")) +
+  labs(title = "Hazard", x = NULL, y = NULL) +
   theme_bw() +
   theme(
-    panel.grid   = element_blank(),
-    axis.title   = element_text(size = 22, face = "bold"),
-    axis.text    = element_text(size = 15, face = "bold"),
-    plot.title   = element_text(size = 25, face = "bold", hjust = 0.4),
-    legend.position = "bottom",
-    plot.margin  = grid::unit(c(0,0,0,0), "pt")   # no outer white space
+    panel.grid.major = element_blank(),
+    axis.text   = element_blank(),
+    axis.ticks  = element_blank(),
+    panel.grid  = element_blank(),
+    axis.title  = element_blank(),
+    
+    plot.title  = element_text(
+      size = 40, face = "bold", hjust = 0,
+      margin = margin(t = 5, b = 55)
+    ),
+    
+    # Legends in one line
+    legend.position = c(0.25, 1.02),   # top-right, outside
+    legend.justification = c("left", "bottom"),
+    legend.direction = "horizontal",
+    legend.box = "horizontal",         # combine guides in one row
+    legend.spacing.x = unit(0.5, "cm"),
+    
+    legend.text  = element_text(size = 22),
+    legend.title = element_text(size = 22, face = "bold"),
+    
+    plot.margin = margin(t = 10, r = 5, b = 0, l = 5)
   ) +
   coord_sf(expand = FALSE)
+
 
 ragg::agg_png("hazard_index_dist.png", width = 2200, height = 1600,
               units = "px", res = 300, background = "white")
@@ -121,43 +145,72 @@ p <- ggplot() +
           aes(fill = "NA"),
           color = NA,
           show.legend = nrow(idx_na) > 0) +
-  scale_fill_manual(name   = NULL, values = c("NA" = "grey85"),
-                    breaks = "NA",
-                    guide  = guide_legend(order = 1, override.aes = list(color = "grey60"))) +
+  scale_fill_manual(
+    name   = NULL,
+    values = c("NA" = "grey85"),
+    breaks = "NA",
+    guide  = guide_legend(order = 1, override.aes = list(fill = "grey85", color = "grey60"))
+  ) +
   
   # Reset the fill scale so we can add the gradient for non-NA cells
   new_scale_fill() +
   
   # 2) Non-NA polygons with continuous gradient
-  geom_sf(data  = idx_ok,
+  geom_sf(data = idx_ok,
           aes(fill = vulnerability_for_plot),
           color = NA) +
-  scale_fill_gradientn(colours = c("white", "skyblue", "navy"),
-                       name = NULL,
-                       na.value = NA,                      
-                       guide = guide_colourbar(order = 2)) +
+  scale_fill_gradientn(
+    colours  = c("white", "skyblue", "navy"),
+    name     = NULL,
+    na.value = NA,
+    guide    = guide_colourbar(
+      order     = 2,
+      barwidth  = 18,   # longer color bar
+      barheight = 0.6
+    )
+  ) +
   
   # 3) County boundaries
   geom_sf(data = western_counties, fill = NA, color = "black", linewidth = 0.5) +
   
   # 4) Labels & theme
   theme_bw() +
-  labs(title = "Physical vulnerability index",
-       x = bquote("Longitude (" * degree * "W)"),
-       y = bquote("Latitude (" * degree * "N)")) +
+  labs(
+    title = "Physical vulnerability",
+    x = NULL,  # blank axis titles
+    y = NULL
+  ) +
   theme(
-    panel.grid   = element_blank(),
-    axis.title   = element_text(size = 22, face = "bold"),
-    axis.text    = element_text(size = 15, face = "bold"),
-    plot.title   = element_text(size = 25, face = "bold", hjust = 0.4),
-    legend.position = "bottom",
-    plot.margin  = grid::unit(c(0,0,0,0), "pt")   # no outer white space
-  )
+    panel.grid.major = element_blank(),
+    panel.grid       = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    axis.title       = element_blank(),
+    
+    # Title position/margins
+    plot.title = element_text(size = 40, face = "bold", hjust = 0,
+                              margin = margin(t = 5, b = 55)),
+    
+    # Legends in one horizontal row, outside near top-right
+    legend.position      = c(0.26, 1.02),       # move left/right by changing first number
+    legend.justification = c("left", "bottom"),
+    legend.direction     = "horizontal",
+    legend.box           = "horizontal",
+    legend.spacing.x     = unit(0.5, "cm"),
+    legend.text          = element_text(size = 22),
+    legend.title         = element_text(size = 22, face = "bold"),
+    
+    # Add a little top/right space for the outside legend
+    plot.margin = margin(t = 5, r = 5, b = 0, l = 5)
+  ) +
+  coord_sf(expand = FALSE)
 
 # Export with ragg
-ragg::agg_png("vulnerability_index_dist.png", width = 2200, height = 1600, units = "px", res = 300)
+ragg::agg_png("vulnerability_index_dist.png",
+              width = 2200, height = 1600, units = "px", res = 300, background = "white")
 print(p)
 dev.off()
+
 
 ############################################# Capacity index (Figure 2)
 
@@ -174,41 +227,68 @@ p <- ggplot() +
     name   = NULL,
     values = c("NA" = "grey85"),
     breaks = "NA",
-    guide  = guide_legend(order = 1, override.aes = list(color = "grey60"))) +
+    guide  = guide_legend(order = 1, override.aes = list(fill = "grey85", color = "grey60"))
+  ) +
   
   # Reset the fill scale for the gradient
   new_scale_fill() +
   
   # 2) Non-NA polygons with continuous gradient
-  geom_sf(data  = idx_ok,
+  geom_sf(data = idx_ok,
           aes(fill = index_capacity),
           color = NA) +
-  scale_fill_gradientn(colours = c("white", "lightgreen", "darkgreen"),
-                       name = NULL,
-                       na.value = NA,
-                       guide = guide_colourbar(order = 2)) +
+  scale_fill_gradientn(
+    colours  = c("white", "lightgreen", "darkgreen"),
+    name     = NULL,
+    na.value = NA,
+    guide    = guide_colourbar(
+      order     = 2,
+      barwidth  = 18,   # longer color bar
+      barheight = 0.6
+    )
+  ) +
   
   # 3) County boundaries
   geom_sf(data = western_counties, fill = NA, color = "black", linewidth = 0.5) +
   
   # 4) Labels & theme
   theme_bw() +
-  labs(title = "Social capacity index",
-       x = bquote("Longitude (" * degree * "W)"),
-       y = bquote("Latitude (" * degree * "N)")) +
+  labs(
+    title = "Social capacity",
+    x = NULL,  # blank axis titles
+    y = NULL
+  ) +
   theme(
-    panel.grid   = element_blank(),
-    axis.title   = element_text(size = 22, face = "bold"),
-    axis.text    = element_text(size = 15, face = "bold"),
-    plot.title   = element_text(size = 25, face = "bold", hjust = 0.4),
-    legend.position = "bottom",
-    plot.margin  = grid::unit(c(0,0,0,0), "pt")   # no outer white space
-  )
+    panel.grid.major = element_blank(),
+    panel.grid       = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    axis.title       = element_blank(),
+    
+    # Title placement
+    plot.title = element_text(size = 40, face = "bold", hjust = 0,
+                              margin = margin(t = 5, b = 55)),
+    
+    # Legends in one horizontal row, outside near top-right
+    legend.position      = c(0.26, 1.02),      # tweak first value to move left/right
+    legend.justification = c("left", "bottom"),
+    legend.direction     = "horizontal",
+    legend.box           = "horizontal",
+    legend.spacing.x     = unit(0.5, "cm"),
+    legend.text          = element_text(size = 22),
+    legend.title         = element_text(size = 22, face = "bold"),
+    
+    # Space for outside legend
+    plot.margin = margin(t = 5, r = 5, b = 0, l = 5)
+  ) +
+  coord_sf(expand = FALSE)
 
 # Export with ragg
-ragg::agg_png("capacity_index_dist.png", width = 2200, height = 1600, units = "px", res = 300)
+ragg::agg_png("capacity_index_dist.png",
+              width = 2200, height = 1600, units = "px", res = 300, background = "white")
 print(p)
 dev.off()
+
 
 
 ############################################# Risk score (Figure 2)
@@ -256,7 +336,6 @@ p <- ggplot() +
 ragg::agg_png("risk_dist.png", width = 2400, height = 1400, units = "px", res = 300)
 print(p)
 dev.off()
-
 
 
 

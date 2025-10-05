@@ -15,11 +15,6 @@ library("stringr")
 library("tigris")
 library("tidyverse")
 library("ggnewscale")
-library('xtable')
-library("dplyr")
-library("officer")
-library("flextable")
-library("stringr")
 
 ############################################# set working directory
 setwd('~/Desktop/Research/Contamination risk/')
@@ -32,14 +27,14 @@ index_hazard <- st_read('index_hazard.gpkg')
 ############################################# data manipulation
 colnames(index_capacity)[4] <- 'index_capacity'
 colnames(index_hazard)[4] <- 'index_hazard'
-colnames(index_vulnerability)[4] <- 'index_vulnerability'
+colnames(index_vulnerability)[3] <- 'index_vulnerability'
 
 ############################################# merging
 index <- index_vulnerability %>% st_drop_geometry() %>% 
   left_join(index_hazard, by = "grid_id") %>%
   left_join(index_capacity, by = "grid_id")
-index <- index[, c(1, 2, 3, 4, 7, 11, 8)]
-colnames(index)[c(1, 3, 7)] <- c('ID', 'block_group_name', 'geom')
+index <- index[, c(1, 2, 5, 8, 3, 6, 10, 7)]
+colnames(index)[c(1, 3, 8)] <- c('ID', 'block_group_name', 'geom')
 index <- st_as_sf(index, sf_column_name = "geom")
 
 #############################################  risk score computation
@@ -69,7 +64,6 @@ index <- index %>% mutate(county_raw = str_extract(block_group_name, "[A-Za-z .'
 index_subset <- index %>% filter(!is.na(county_norm) & county_norm %in% target_counties)
 
 
-
 ###### summary statistics
 
 
@@ -92,14 +86,18 @@ hazard <- hazard %>% st_drop_geometry()
 
 
 ##### vulnerability
-vulnerability <- st_read('nc_grid_vulnerability_full.gpkg')
+vulnerability <- st_read('nc_grid_vulnerability_929.gpkg')
+vulnerability$drainage_class_int <- as.factor(round(vulnerability$drainage_class_int))
+vulnerability$str_int <- as.factor(round(vulnerability$str_int))
+vulnerability$weg_int <- as.factor(round(vulnerability$weg_int))
+vulnerability$hydgrp_int <- as.factor(round(vulnerability$hydgrp_int))
+vulnerability <- vulnerability %>% select(-matches("A_"))
 vulnerability_process <- st_read('nc_grid_vulnerability_imputed.gpkg')
 vulnerability <- vulnerability[, which(colnames(vulnerability) %in% colnames(vulnerability_process))]
 dict.vul <- readxl::read_excel('Table S1.xlsx', sheet = 'Physical Vulnerability')
 colnames(dict.vul)[2] <- 'Feature_Names'
-varname.vul <- data.frame(`Feature_Names` = colnames(vulnerability)[-c(1:2, 66)])
+varname.vul <- data.frame(`Feature_Names` = colnames(vulnerability)[-c(1, 2, 50)])
 unit.vul <- left_join(varname.vul, dict.vul, by = 'Feature_Names') %>% select(Feature_Names, Unit)
-colnames(vulnerability)[1] <- 'ID'
 vulnerability <- vulnerability %>% st_drop_geometry()
 
 
@@ -112,7 +110,7 @@ full_subset <- full[which(full$Pct_Wells == 100), ]
 full_subset <- full_subset %>% mutate(county_raw = str_extract(block_group_name, "[A-Za-z .'-]+ County"),
                           county_norm = str_squish(str_to_title(county_raw)))
 full_subset <- full_subset %>% filter(!is.na(county_norm) & county_norm %in% target_counties)
-full_subset <- full_subset[, -c(96, 97)]
+full_subset <- full_subset[, -c(80, 81)]
 
 
 ### condense the categories
@@ -135,6 +133,31 @@ lith <- full_subset$lith
 top2 <- names(sort(table(lith), decreasing = TRUE)[c(1, 2)])
 lith[which(lith %in% top2 == FALSE)] <- 'others'
 full_subset$lith <- lith
+
+
+# condense the levels for landcover
+cate <- as.character(round(full_subset$landcover))
+cate.replace <- sapply(cate, function(x) {
+  if (x %in% c('21', '22', '23', '24')) {
+    return('Developed')
+  } else if (x %in% c('81', '82')) {
+    return('Agriculture')
+  } else if (x %in% c('41', '42', '43')) {
+    return('Forest')
+  } else if (x %in% c('51', '52')) {
+    return('Shrubland')
+  } else if (x %in% c('71', '72')) {
+    return('Grassland')
+  } else if (x %in% '31') {
+    return('Barren Land')
+  } else if (x %in% c('90', '95')) {
+    return('Wetlands')
+  } else if (x %in% c('11', '12')) {
+    return('Water')
+  } else NA
+})
+full_subset$landcover <- cate.replace
+
 
 
 ##### summary statistics
@@ -162,9 +185,9 @@ summ <- function(x, names) {
 ################################################################## Table S2
 
 ############################ summary statistics for vulnerability
-vulnerability_subset <- full_subset[, 33:95]
+vulnerability_subset <- full_subset[, 33:79]
 ## continuous variable
-num_var <- which(sapply(vulnerability_subset, class) == 'numeric')
+num_var <- which(sapply(vulnerability_subset, class) %in% c('numeric', 'integer'))
 summary <- summ(vulnerability_subset[, num_var], 
                 names = colnames(vulnerability_subset)[num_var])
 summary$Unit <- unit.vul$Unit[num_var]
@@ -173,7 +196,7 @@ xtable(summary)
 
 ## categorical variable
 cate_var <- which(!sapply(vulnerability_subset, class) %in% c('numeric', 'integer'))
-cate_var <- setdiff(cate_var, 42)
+colnames(vulnerability_subset)[cate_var]
 for (j in cate_var) {
   print(table(vulnerability_subset[, j]))
 }
@@ -212,7 +235,9 @@ xtable(summary)
 
 
 ################################################################## Table 1
-risk_summary_by_county <- index_subset %>%
+library('flextable')
+library('officer')
+risk_summary_by_county <- index_subset %>% st_drop_geometry() %>%
   group_by(county_norm) %>%
   summarise(
     Mean   = mean(risk, na.rm = TRUE),
@@ -237,35 +262,38 @@ doc <- read_docx() %>%
 print(doc, target = "risk_summary_by_county.docx")
 
 
+# needs: library("dplyr"); library("rlang"); library("stringr")
+library("rlang")
+library("stringr")
 summarise_index <- function(data, county_col, value_col) {
   county_sym <- rlang::ensym(county_col)
   value_sym  <- rlang::ensym(value_col)
   
   data %>%
-    group_by(!!county_sym) %>%
-    summarise(
+    dplyr::group_by(!!county_sym) %>%
+    dplyr::summarise(
       Mean   = mean(!!value_sym, na.rm = TRUE),
       SD     = sd(!!value_sym, na.rm = TRUE),
-      `25%`  = quantile(!!value_sym, 0.25, na.rm = TRUE),
-      Median = median(!!value_sym, na.rm = TRUE),
-      `75%`  = quantile(!!value_sym, 0.75, na.rm = TRUE),
+      `25%`  = as.numeric(stats::quantile(!!value_sym, 0.25, na.rm = TRUE, names = FALSE)),
+      Median = stats::median(!!value_sym, na.rm = TRUE),
+      `75%`  = as.numeric(stats::quantile(!!value_sym, 0.75, na.rm = TRUE, names = FALSE)),
       .groups = "drop"
     ) %>%
-    mutate(across(-!!county_sym, ~ round(.x, 2))) %>%
-    arrange(!!county_sym) %>%
-    rename(County = !!county_sym)
+    dplyr::arrange(!!county_sym) %>%
+    dplyr::rename(County = !!county_sym) %>%
+    dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~ round(.x, 2)))
 }
 
 escape_latex <- function(x) {
-  x %>%
-    str_replace_all("\\\\", "\\\\textbackslash{}") %>%
-    str_replace_all("([#$%&_{}])", "\\\\\\1") %>%
-    str_replace_all("\\^", "\\\\textasciicircum{}") %>%
-    str_replace_all("~", "\\\\textasciitilde{}")
+  x <- as.character(x)
+  x <- stringr::str_replace_all(x, "\\\\", "\\\\textbackslash{}")
+  x <- stringr::str_replace_all(x, "([#$%&_{}])", "\\\\\\1")
+  x <- stringr::str_replace_all(x, "\\^", "\\\\textasciicircum{}")
+  x <- stringr::str_replace_all(x, "~", "\\\\textasciitilde{}")
+  x
 }
 
 df_to_latex_rows <- function(df) {
-  # ensure numeric columns are formatted with 2 decimals
   fmt <- function(v) ifelse(is.na(v), "", formatC(v, format = "f", digits = 2))
   county <- escape_latex(df$County)
   paste0(
@@ -279,12 +307,10 @@ df_to_latex_rows <- function(df) {
 }
 
 make_table_S2_latex <- function(index_subset, file = NULL) {
-  # Compute panels
   cap_tbl <- summarise_index(index_subset, county_norm, index_capacity)
   haz_tbl <- summarise_index(index_subset, county_norm, index_hazard)
   vul_tbl <- summarise_index(index_subset, county_norm, index_vulnerability)
   
-  # Header blocks for longtable
   header_top <- paste0(
     "\\begin{longtable}{lrrrrr}
 \\caption{Table S2. County-wise descriptive statistics by module (Mean, SD, 25th percentile, Median, 75th percentile).}\\\\
@@ -305,20 +331,16 @@ make_table_S2_latex <- function(index_subset, file = NULL) {
 
 \\bottomrule
 \\endlastfoot
-"
-  )
+")
   
-  # Panel headers
   panel_a <- "\\multicolumn{6}{l}{\\textbf{(a) Capacity module}} \\\\\n\\midrule\n"
   panel_b <- "\\addlinespace[6pt]\n\\multicolumn{6}{l}{\\textbf{(b) Hazard module}} \\\\\n\\midrule\n"
   panel_c <- "\\addlinespace[6pt]\n\\multicolumn{6}{l}{\\textbf{(c) Vulnerability module}} \\\\\n\\midrule\n"
   
-  # Build body rows
   body_a <- paste(df_to_latex_rows(cap_tbl), collapse = "\n")
   body_b <- paste(df_to_latex_rows(haz_tbl), collapse = "\n")
   body_c <- paste(df_to_latex_rows(vul_tbl), collapse = "\n")
   
-  # Combine full LaTeX
   latex <- paste0(
     header_top,
     panel_a, body_a, "\n",
@@ -327,12 +349,10 @@ make_table_S2_latex <- function(index_subset, file = NULL) {
     "\\end{longtable}\n"
   )
   
-  # Output
-  if (!is.null(file)) {
-    writeLines(latex, file, useBytes = TRUE)
-  }
+  if (!is.null(file)) writeLines(latex, file, useBytes = TRUE)
   latex
 }
 
+# usage:
 latex_code <- make_table_S2_latex(index_subset, file = "Table_S2_by_module.tex")
 cat(latex_code)
