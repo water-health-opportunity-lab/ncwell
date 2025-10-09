@@ -17,30 +17,8 @@ library("tidyverse")
 library("ggnewscale")
 
 ############################################# read data
-index_capacity <- st_read('index_capacity.gpkg')
-index_vulnerability <- st_read('index_vulnerability.gpkg')
-index_hazard <- st_read('index_hazard.gpkg')
-
-############################################# data manipulation
-colnames(index_capacity)[4] <- 'index_capacity'
-colnames(index_hazard)[4] <- 'index_hazard'
-colnames(index_vulnerability)[3] <- 'index_vulnerability'
+index <- st_read('nc_grid_index.gpkg')
 well_tests <- st_read('well_tests_filtered.gpkg')
-
-############################################# merging
-index <- index_vulnerability %>% st_drop_geometry() %>% 
-  left_join(index_hazard, by = "grid_id") %>%
-  left_join(index_capacity, by = "grid_id")
-index <- index[, c(1, 2, 5, 8, 3, 6, 10, 7)]
-colnames(index)[c(1, 3, 8)] <- c('ID', 'block_group_name', 'geom')
-index <- st_as_sf(index, sf_column_name = "geom")
-
-#############################################  risk score computation
-index$risk <- NA_real_
-ok <- !is.na(index$index_capacity)
-index$risk[ok] <- index$index_vulnerability[ok] * index$index_hazard[ok] / exp(2 * index$index_capacity[ok])
-index$risk[ok] <- (index$risk[ok] - min(index$risk[ok])) / (max(index$risk[ok]) - min(index$risk[ok]))
-st_write(index, 'nc_grid_index.gpkg', layer = "my_layer", driver = "GPKG", append = FALSE)
 
 #############################################  target counties
 target_counties <- c("Alexander County","Alleghany County","Ashe County","Avery County",
@@ -50,7 +28,6 @@ target_counties <- c("Alexander County","Alleghany County","Ashe County","Avery 
                      "Madison County","Mcdowell County","Mitchell County","Polk County",
                      "Rutherford County","Transylvania County","Watauga County","Wilkes County",
                      "Yancey County")
-
 
 ############################################# NC counties
 NC_counties <- tigris::counties(state = "NC", year = 2024)
@@ -73,7 +50,6 @@ well_tests_filtered <- well_tests %>%
   filter(lon <= -80)
 
 ######## Capacity index with contaminated well tests overlaid
-
 idx_na <- subset(index_subset,  is.na(index_capacity))
 idx_ok <- subset(index_subset, !is.na(index_capacity))
 

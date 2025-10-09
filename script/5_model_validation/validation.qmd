@@ -34,15 +34,12 @@ library(cutpointr)
 library(rpart)
 library(rpart.plot)
 library(arm)
+library(caret)
 ```
 
 ```{r, include=FALSE}
 # Read files
 risk <- st_read("nc_grid_index.gpkg")
-
-risk_capacity <- st_read("index_capacity.gpkg")
-risk_hazard <- st_read("index_hazard.gpkg")
-risk_vulnerability <- st_read("index_vulnerability.gpkg")
 
 microbio_data_hurricane <- read.csv("ecoli_coords_hurricane.csv", strip.white = TRUE)
 microbio_data_microbiology <- read.csv("ecoli_coords_microbio.csv", strip.white = TRUE)
@@ -121,6 +118,7 @@ microbio_with_risk <- rbind(microbio_with_risk_hurricane, microbio_with_risk_mic
 # Sort by counties with most samples
 sort(table(microbio_with_risk$System_Name), decreasing = TRUE)
 ```
+
 #### Check for the values in Ecoli_Result and Total_Coliform_Result
 
 ```{r collapse = TRUE}
@@ -141,8 +139,8 @@ microbio_binary <- microbio_with_risk %>%
 
 microbio_continuous <- microbio_with_risk %>%
   filter(!(Ecoli_Result %in% c("Absent", "Present"))) %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "1"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1"), "Absent", "Present"))
+  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1"), "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1"), "Absent", "Present"))
 ```
 
 #### Binarize continuous testing results
@@ -152,16 +150,16 @@ In the pooled datasets created below, binary and continuous E. coli and Total Co
 ```{r}
 # Turn all testing results into Absent or Present
 microbio_pooled_hurricane <- microbio_with_risk_hurricane %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0","<1", "1", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0","<1", "1", "Absent"), "Absent", "Present"))
+  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0","<1", "Absent"), "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0","<1", "Absent"), "Absent", "Present"))
 
 microbio_pooled_microbiology <- microbio_with_risk_microbiology %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "1", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1", "Absent"), "Absent", "Present"))
+  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "Absent"), "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "Absent"), "Absent", "Present"))
 
 microbio_pooled <- microbio_with_risk %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "1", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1", "Absent"), "Absent", "Present"))
+  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "Absent"), "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "Absent"), "Absent", "Present"))
 ```
 
 #### Filter for only western counties
@@ -351,7 +349,7 @@ ggplot(microbio_weekly_summary, aes(x = week, y = n)) +
 
 ### 1.5 Filter dates to effective time period (9/25/24 - 3/1/25)
 
-Analyzing the plots from section 1.4, we see that the level of microbial contamination falls to its lowest point in early March. Here, we filter samples collected after 3/1/25, the end of the effective time period. 
+Analyzing the plots from section 1.4, we see that the level of microbial contamination falls to its lowest point in early March. Here, we filter samples collected after 3/1/25, the end of the effective time period.
 
 ```{r collapse = TRUE}
 start_date <- '2024-09-25'
@@ -399,7 +397,6 @@ We observe:
 -   `{r} table_affected_filtered_coliform["Absent"]` uncontaminated and `{r} table_affected_filtered_coliform["Present"]` contaminated Total Coliform samples in `microbio_pooled_affected_filtered`.
 
 Downstream analysis will be performed using `microbio_pooled_affected_filtered`.
-
 
 ### 2.1.1 Risk index distribution for E. coli in western counties
 
@@ -492,7 +489,39 @@ coefplot(multi_log_coliform)
 # summary(capacity_log_coliform)
 ```
 
-## 4. Youden's J statistic for risk index split
+## 4. K-fold cross validation for logistic regression
+
+```{r}
+# Define k-fold cross-validation
+set.seed(123)  # reproducibility
+train_control <- trainControl(
+  method = "cv",       # cross-validation
+  number = 10,         # 10-fold CV
+  classProbs = TRUE,   # needed for ROC/AUC
+  sampling = "smote"
+)
+
+# Reformat outcome as factor with levels "Absent"/"Present"
+microbio_pooled_affected_filtered$Coliform_Result_Binary_Model <-
+  factor(microbio_pooled_affected_filtered$Coliform_Result_Binary_Model,
+         levels = c(0, 1), labels = c("Absent", "Present"))
+
+# Train with caret
+cv_model <- train(
+  Coliform_Result_Binary_Model ~ index_vulnerability + index_hazard + index_capacity,
+  data = microbio_pooled_affected_filtered,
+  method = "glm",
+  family = "binomial",
+  trControl = train_control,
+  metric = "ROC"
+)
+
+# Results
+print(cv_model)
+
+```
+
+## 5. Youden's J statistic for risk index split
 
 Youden's J statistic was used to compute the cutoff threshold for contaminated vs. uncontaminated samples. The cutoff was 0.2103 for E. coli and 0.1648 for Coliform.
 
