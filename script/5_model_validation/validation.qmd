@@ -533,6 +533,7 @@ summary(coliform_cp)
 ```
 
 ## 6. Save microbio_pooled_affected_filtered as GPKG for Figure 4
+
 ```{r}
 st_write(microbio_pooled_affected_filtered, 'well_tests_filtered.gpkg', layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
