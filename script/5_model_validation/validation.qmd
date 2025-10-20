@@ -134,16 +134,16 @@ In the pooled datasets created below, binary and continuous E. coli and Total Co
 ```{r}
 # Turn all testing results into Absent or Present
 microbio_pooled_hurricane <- microbio_with_risk_hurricane %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "Absent"), "Absent", "Present"))
+  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "Absent"), "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "Absent"), "Absent", "Present"))
 
 microbio_pooled_microbiology <- microbio_with_risk_microbiology %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "Absent"), "Absent", "Present"))
+  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "Absent"), "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "Absent"), "Absent", "Present"))
 
 microbio_pooled <- microbio_with_risk %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "Absent"), "Absent", "Present"))
+  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "Absent"), "Absent", "Present")) %>%
+  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "Absent"), "Absent", "Present"))
 
 # Check for unique values
 table(microbio_pooled$Ecoli_Result_Binary)
@@ -211,7 +211,7 @@ ggplot(microbio_pooled) +
   theme_minimal()
 ```
 
-When all considering regions with low private well usage, there is not a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.5232), with samples from the western counties having a mean risk of 0.265 and non-western counties having a mean risk of 0.264 The risk index geopackage has since been updated, so the tables and plots above exclude regions with low private well usage. 
+When all considering regions with low private well usage, there is not a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.5232), with samples from the western counties having a mean risk of 0.265 and non-western counties having a mean risk of 0.264 The risk index geopackage has since been updated, so the tables and plots above exclude regions with low private well usage.
 
 ### 1.4 Percentage of contaminated samples per week
 
@@ -537,4 +537,3 @@ summary(coliform_cp)
 ```{r}
 st_write(microbio_pooled_affected_filtered, 'well_tests_filtered.gpkg', layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
-
