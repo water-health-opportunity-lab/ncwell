@@ -17,30 +17,8 @@ library("tidyverse")
 library("ggnewscale")
 
 ############################################# read data
-index_capacity <- st_read('index_capacity.gpkg')
-index_vulnerability <- st_read('index_vulnerability.gpkg')
-index_hazard <- st_read('index_hazard.gpkg')
-
-############################################# data manipulation
-colnames(index_capacity)[4] <- 'index_capacity'
-colnames(index_hazard)[4] <- 'index_hazard'
-colnames(index_vulnerability)[3] <- 'index_vulnerability'
+index <- st_read('nc_grid_index.gpkg')
 well_tests <- st_read('well_tests_filtered.gpkg')
-
-############################################# merging
-index <- index_vulnerability %>% st_drop_geometry() %>% 
-  left_join(index_hazard, by = "grid_id") %>%
-  left_join(index_capacity, by = "grid_id")
-index <- index[, c(1, 2, 5, 8, 3, 6, 10, 7)]
-colnames(index)[c(1, 3, 8)] <- c('ID', 'block_group_name', 'geom')
-index <- st_as_sf(index, sf_column_name = "geom")
-
-#############################################  risk score computation
-index$risk <- NA_real_
-ok <- !is.na(index$index_capacity)
-index$risk[ok] <- index$index_vulnerability[ok] * index$index_hazard[ok] / exp(2 * index$index_capacity[ok])
-index$risk[ok] <- (index$risk[ok] - min(index$risk[ok])) / (max(index$risk[ok]) - min(index$risk[ok]))
-st_write(index, 'nc_grid_index.gpkg', layer = "my_layer", driver = "GPKG", append = FALSE)
 
 #############################################  target counties
 target_counties <- c("Alexander County","Alleghany County","Ashe County","Avery County",
@@ -50,7 +28,6 @@ target_counties <- c("Alexander County","Alleghany County","Ashe County","Avery 
                      "Madison County","Mcdowell County","Mitchell County","Polk County",
                      "Rutherford County","Transylvania County","Watauga County","Wilkes County",
                      "Yancey County")
-
 
 ############################################# NC counties
 NC_counties <- tigris::counties(state = "NC", year = 2024)
@@ -73,7 +50,6 @@ well_tests_filtered <- well_tests %>%
   filter(lon <= -80)
 
 ######## Capacity index with contaminated well tests overlaid
-
 idx_na <- subset(index_subset,  is.na(index_capacity))
 idx_ok <- subset(index_subset, !is.na(index_capacity))
 
@@ -154,7 +130,7 @@ dev.off()
 
 
 
-######## Risk score with contaminated well tests overlaid (Figure 4)
+######## Risk score with total coliform contaminated well tests overlaid (Figure 4)
 idx_na <- subset(index_subset,  is.na(risk))
 idx_ok <- subset(index_subset, !is.na(risk))
 
@@ -198,12 +174,12 @@ p <- ggplot() +
         legend.text = element_text(size = 12))
 
 # Export
-ragg::agg_png("risk_contaminated.png", width = 2400, height = 1400, units = "px", res = 300)
+ragg::agg_png("risk_contaminated_coliform.png", width = 2400, height = 1400, units = "px", res = 300)
 print(p)
 dev.off()
 
 
-######## Risk score with uncontaminated well tests overlaid (Figure 4)
+######## Risk score with total coliform uncontaminated well tests overlaid (Figure 4)
 idx_na <- subset(index_subset,  is.na(risk))
 idx_ok <- subset(index_subset, !is.na(risk))
 
@@ -247,6 +223,104 @@ p <- ggplot() +
         legend.text = element_text(size = 12))
 
 # Export
-ragg::agg_png("risk_uncontaminated.png", width = 2400, height = 1400, units = "px", res = 300)
+ragg::agg_png("risk_uncontaminated_coliform.png", width = 2400, height = 1400, units = "px", res = 300)
+print(p)
+dev.off()
+
+
+######## Risk score with E. coli contaminated well tests overlaid (Figure 4)
+idx_na <- subset(index_subset,  is.na(risk))
+idx_ok <- subset(index_subset, !is.na(risk))
+
+p <- ggplot() +
+  # 1) NA polygons as discrete legend entry
+  geom_sf(data = idx_na,
+          aes(fill = "NA"),
+          color = NA,
+          show.legend = nrow(idx_na) > 0) +
+  scale_fill_manual(name = NULL,
+                    values = c("NA" = "grey85"),
+                    breaks = "NA",
+                    guide  = guide_legend(order = 1, override.aes = list(color = "grey60"))) +
+  
+  # Reset the fill scale
+  new_scale_fill() +
+  
+  # 2) Non-NA polygons with gradient
+  geom_sf(data  = idx_ok, aes(fill = risk), color = NA) +
+  scale_fill_gradientn(colours = c("white", "pink", "purple", "black"),
+                       name = NULL,
+                       na.value = NA,
+                       guide = guide_colourbar(order = 2)) +
+  
+  # 3) County boundaries
+  geom_sf(data = western_counties, fill = NA, color = "black", linewidth = 0.5) +
+  
+  # 4) Well test results
+  geom_sf(data = filter(well_tests_filtered, Ecoli_Result_Binary == "Present"), color = "red", shape = 'x', size = 4) +
+  
+  # 5) Labels & theme
+  theme_bw() +
+  labs(title = "Risk score",
+       x = bquote("Longitude (" * degree * "W)"),
+       y = bquote("Latitude (" * degree * "N)"),) +
+  theme(panel.grid  = element_blank(),
+        axis.title  = element_text(size = 14, face = "bold"),
+        axis.text   = element_text(size = 12, face = "bold"),
+        plot.title  = element_text(size = 16, face = "bold", hjust = 0.5),
+        plot.margin = margin(t = 15, r = 15, b = 15, l = 15),
+        legend.text = element_text(size = 12))
+
+# Export
+ragg::agg_png("risk_contaminated_ecoli.png", width = 2400, height = 1400, units = "px", res = 300)
+print(p)
+dev.off()
+
+
+######## Risk score with E. coli uncontaminated well tests overlaid (Figure 4)
+idx_na <- subset(index_subset,  is.na(risk))
+idx_ok <- subset(index_subset, !is.na(risk))
+
+p <- ggplot() +
+  # 1) NA polygons as discrete legend entry
+  geom_sf(data = idx_na,
+          aes(fill = "NA"),
+          color = NA,
+          show.legend = nrow(idx_na) > 0) +
+  scale_fill_manual(name = NULL,
+                    values = c("NA" = "grey85"),
+                    breaks = "NA",
+                    guide  = guide_legend(order = 1, override.aes = list(color = "grey60"))) +
+  
+  # Reset the fill scale
+  new_scale_fill() +
+  
+  # 2) Non-NA polygons with gradient
+  geom_sf(data  = idx_ok, aes(fill = risk), color = NA) +
+  scale_fill_gradientn(colours = c("white", "pink", "purple", "black"),
+                       name = NULL,
+                       na.value = NA,
+                       guide = guide_colourbar(order = 2)) +
+  
+  # 3) County boundaries
+  geom_sf(data = western_counties, fill = NA, color = "black", linewidth = 0.5) +
+  
+  # 4) Well test results
+  geom_sf(data = filter(well_tests_filtered, Ecoli_Result_Binary == "Absent"), color = "#09C81C", shape = 19, size = 1.5, alpha = 0.5) +
+  
+  # 5) Labels & theme
+  theme_bw() +
+  labs(title = "Risk score",
+       x = bquote("Longitude (" * degree * "W)"),
+       y = bquote("Latitude (" * degree * "N)")) +
+  theme(panel.grid  = element_blank(),
+        axis.title  = element_text(size = 14, face = "bold"),
+        axis.text   = element_text(size = 12, face = "bold"),
+        plot.title  = element_text(size = 16, face = "bold", hjust = 0.5),
+        plot.margin = margin(t = 15, r = 15, b = 15, l = 15),
+        legend.text = element_text(size = 12))
+
+# Export
+ragg::agg_png("risk_uncontaminated_ecoli.png", width = 2400, height = 1400, units = "px", res = 300)
 print(p)
 dev.off()
