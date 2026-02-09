@@ -70,28 +70,165 @@ colnames(scaled_data) <- c('Satelite-based inundation map',
 Next, we perform the PCA and check the proportion of variance explained by different PCs. As we can observe below, the first five PCs explained the majority of the variance of the data.
 
 ```{r}
-### principal component analysis (PCA)
-pca <- prcomp(scaled_data, center = FALSE, scale. = FALSE)
+# =============================================================
+# Constrained PCA with partial sign constraints via directionality
+# directionality: +1 (force >=0), -1 (force <=0), NA (no constraint)
+# =============================================================
 
-##################################### Scree plot
-fviz_eig(pca, addlabels = TRUE, barfill = "white", barcolor = "magenta") +
-  labs(title = "Scree Plot for Principal Component Analysis", 
+# ---- (internal) solve first constrained PC by projected power + multi-start
+.constrained_pc1 <- function(S, Jpos = integer(), Jneg = integer(),
+                             maxit = 2000, tol = 1e-8, nstart = 10) {
+  p <- ncol(S)
+  best_val <- -Inf
+  best_u   <- rep(NA_real_, p)
+
+  for (rs in 1:nstart) {
+    u <- rnorm(p); u <- u / sqrt(sum(u^2))
+    prev_val <- -Inf
+
+    for (it in 1:maxit) {
+      v <- S %*% u                            # power step (gradient)
+      if (length(Jpos)) v[Jpos] <- pmax(v[Jpos], 0)  # enforce ≥ 0
+      if (length(Jneg)) v[Jneg] <- pmin(v[Jneg], 0)  # enforce ≤ 0
+      nv <- sqrt(sum(v^2))
+      if (nv == 0) {                          # degenerate; reinit
+        u <- rnorm(p); u <- u / sqrt(sum(u^2))
+        next
+      }
+      u_new <- v / nv
+      cur_val <- drop(t(u_new) %*% S %*% u_new)
+      if (abs(cur_val - prev_val) < tol) {    # convergence
+        u <- u_new
+        break
+      }
+      u <- u_new
+      prev_val <- cur_val
+    }
+
+    val <- drop(t(u) %*% S %*% u)
+    if (val > best_val) { best_val <- val; best_u <- u }
+  }
+
+  list(u = best_u, value = best_val)
+}
+
+# ---- main: constrained PCA with optional directionality vector
+constrained_pca <- function(X,
+                            directionality = NULL,   # +1, -1, NA per variable (length p)
+                            Jpos = integer(),        # optional explicit indices for >=0
+                            Jneg = integer(),        # optional explicit indices for <=0
+                            ncomp = 2,
+                            center = TRUE, scale. = TRUE,
+                            maxit = 2000, tol = 1e-8, nstart = 10,
+                            drop_tol = 1e-10) {
+
+  # 0) scale data like prcomp
+  Xs <- scale(X, center = center, scale = scale.)
+  S  <- crossprod(Xs) / nrow(Xs)                 # correlation if scale.=TRUE
+  p  <- ncol(S)
+
+  # 1) interpret directionality (if given); explicit Jpos/Jneg override NAs
+  if (!is.null(directionality)) {
+    if (length(directionality) != p)
+      stop("Length of 'directionality' must equal ncol(X).")
+    Jpos_dir <- which(directionality > 0)
+    Jneg_dir <- which(directionality < 0)
+  } else {
+    Jpos_dir <- integer(0); Jneg_dir <- integer(0)
+  }
+  # merge with explicit Jpos/Jneg arguments (union)
+  Jpos <- sort(unique(c(Jpos_dir, Jpos)))
+  Jneg <- sort(unique(c(Jneg_dir, Jneg)))
+
+  # 2) extract components with deflation
+  U    <- matrix(NA_real_, p, ncomp)
+  vals <- numeric(ncomp)
+  Sdef <- S
+
+  for (k in 1:ncomp) {
+    pc1  <- .constrained_pc1(Sdef, Jpos = Jpos, Jneg = Jneg,
+                             maxit = maxit, tol = tol, nstart = nstart)
+    U[, k]   <- pc1$u
+    vals[k]  <- pc1$value
+    # spectral (rank-1) deflation
+    Sdef <- Sdef - vals[k] * (pc1$u %*% t(pc1$u))
+  }
+
+  # 3) order by variance explained (descending) and drop ~zero
+  ord     <- order(vals, decreasing = TRUE)
+  U       <- U[, ord, drop = FALSE]
+  vals    <- vals[ord]
+  keep    <- which(vals > drop_tol)
+  if (length(keep) == 0L) {
+    warning("All components have ~zero variance under constraints; returning empty model.")
+    keep <- 1L
+  }
+  U    <- U[, keep, drop = FALSE]
+  vals <- vals[keep]
+
+  # 4) compute scores on the scaled data
+  scores <- Xs %*% U
+
+  # 5) return prcomp-like list (not classed yet)
+  list(
+    loadings = U,                      # p x q (q = kept components)
+    sdev     = sqrt(pmax(vals, 0)),    # standard deviations per component
+    x        = scores,                 # n x q scores
+    center   = attr(Xs, "scaled:center"),
+    scale    = attr(Xs, "scaled:scale"),
+    Jpos     = Jpos,
+    Jneg     = Jneg,
+    drop_tol = drop_tol
+  )
+}
+
+# ---- helper: cast to "prcomp" so you can use fviz_eig() etc.
+as_prcomp_constrained <- function(fit) {
+  out <- list(
+    sdev     = fit$sdev,
+    rotation = fit$loadings,
+    center   = fit$center,
+    scale    = fit$scale,
+    x        = fit$x
+  )
+  class(out) <- "prcomp"
+  out
+}
+
+# correct for directionality
+p <- ncol(scaled_data)
+directionality <- rep(1, p)
+
+
+# constrained PCA
+pca <- constrained_pca(
+  X = scaled_data,
+  directionality = directionality,
+  ncomp = ncol(scaled_data),
+  nstart = 30
+)
+
+# scree plot
+library(factoextra)
+fviz_eig(as_prcomp_constrained(pca), addlabels = TRUE,
+         barfill = "white", barcolor = "magenta") +
+  labs(title = "Scree Plot for Principal Component Analysis",
        x = "Principal Components", y = "Percentage of Variance Explained") +
   theme_minimal() +
-  theme(
-    plot.title = element_text(hjust = 0.5),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank()
-  )
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
 ```
 
-To make the PCs more interpretable, we apply a varimax rotation to the loadings.
+Next, we interpret the PCs as follows.
 
 ```{r}
-p <- ncol(scaled_data)
-rot <- varimax(pca$rotation)$rotmat
+# principal components
+PCs <- pca$x
+
+## interpretation of the first 5 PCs
+rot <- as_prcomp_constrained(pca)$rotation
 rownames(rot) <- colnames(scaled_data)
-PCs <- scaled_data %*% rot
 
 ## interpretation of the first 5 PCs
 # PC1
@@ -185,27 +322,56 @@ So, we can observe that FEMA Floodplain, Agricultural Runoff, Superfund, and Sat
 Next, we consider using weighted average of the PCs, where the weights can be determined based on expert opinions. Next, we interpret the first five PCs, where the variables received more than weights more than 0.30 are highlighted. To make the index more interpretable, we consider a transformation guided by Box-Cox transformation. Finally, we standardize the index.
 
 ```{r}
+# Eigenvalues (variance explained by each PC)
+eigenvalues <- pca$sdev^2
+
+# Proportion (fraction) of total variance explained
+pve <- eigenvalues / sum(eigenvalues)
+
+# Convert to percentages
+pve_percent <- 100 * pve
+
+# Cumulative percentage of variance explained
+cum_pve_percent <- cumsum(pve_percent)
+
 ## raw distribution of the index
-index <- apply(PCs[, 1:5], 1, mean)
+which(cum_pve_percent > 80)
+
+## raw distribution of the index
+# index <- apply(PCs[, 1:min(which(cum_pve_percent > 60))], 1, mean)
+# matrix(c(0.00103, 0.01605))
+index <- PCs[, c(5, 6)] %*% matrix(c(0.099985, 0.082707))
 hist(index, main = 'Raw Hazard Index', col = 'white',
      border = 'magenta')
 
 ## transformation
-lmod <- lm(index - min(index) + 1e-4 ~ 1)
+lmod <- lm(index - min(index) + 1e-3 ~ 1)
 bc <- boxcox(lmod)
 (lambda <- bc$x[which.max(bc$y)])
+
+if (lambda > 0) {
+  index <- (index - min(index)) ^ (as.numeric(lambda))
+} else {
+  index <- log(index - min(index) + 1e-3)
+}
+
 index <- (index - min(index)) / (max(index) - min(index))
-index <- index ^ (as.numeric(lambda))
 data$index <- index
 
 st_write(data[, c(1, 2, 11, 13)], 'index_hazard.gpkg',
          layer = "my_layer", driver = "GPKG", append = FALSE)
+out <- data %>% select(-c(block_group_name))
+out <- cbind(data, PCs[, 1:6])
+colnames(out)[(ncol(out) - 6):(ncol(out) - 1)] <- paste0('haz_PC', 1:6)
+st_write(out, 'index_hazard_detailed.gpkg',
+         layer = "my_layer", driver = "GPKG", append = FALSE)
 ```
+
 Let us tentatively use positive weights for those 5 PCs. To make the results more interpretable, we can compute the contribution of the variables below. Note that Satelite-based inundation map, Superfund, CAFOs, and FEMA Floodplain are the variables with high contribution.
 
 ```{r}
 # Compute squared loadings
-loadings <- pca$rotation
+loadings <- rot
 squared_loadings <- loadings^2
 
 # Compute percentage contribution
@@ -213,9 +379,53 @@ contrib <- sweep(squared_loadings, 2,
                  colSums(squared_loadings), FUN = "/")
 
 # View contribution
-cont <- round(apply(contrib[, 1:5], 1, sum), 2) * 100
+cont <- round(apply(contrib[, 1:5], 1, sum), 2)
+cont <- cont / sum(cont) * 100
 print(cont)
-cont[which(cont > 60)]
+```
+
+```{r}
+idx <- order(cont, decreasing = TRUE)[1:8]
+var_names <- names(cont)[idx]
+var_names[c(7, 6, 5)] <- c('Satelite-based Inundation Map', 'TRI Water Impact', 'TRI Total Impact')
+cont.subset <- cont[idx]
+print(range(cont))
+print(mean(cont))
+
+# Create a data frame for plotting
+df <- data.frame(Variable = var_names, cont.subset = cont.subset)
+
+p <- ggplot(df, aes(x = reorder(Variable, cont.subset), y = cont.subset, fill = cont.subset)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  scale_fill_gradient2(
+    low = "white", high = "red",
+    name = "Contribution (%)"   # legend title
+  ) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +  # add % to tick labels
+  coord_flip() +
+  labs(
+    title = "Hazard Module",
+    x = "",
+    y = "Contribution (%)"       # axis title
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y  = element_text(color = "black", size = 22, face = "bold"),
+    axis.text.x  = element_text(color = "black", size = 22),
+    axis.title.x = element_text(color = "black", face = "bold", size = 22),
+    axis.title.y = element_text(color = "black", face = "bold", size = 22),
+    plot.title   = element_text(color = "black", face = "bold",
+                                hjust = 0.5, size = 22),
+    legend.title = element_text(color = "black", face = "bold", size = 22),
+    legend.text  = element_text(size = 22, color = "black"),
+    legend.position = "none"
+  )
+
+
+ggsave(filename = "hazard_import.png",
+       plot = p,
+       width = 3000, height = 1400, units = "px",
+       dpi = 300, device = ragg::agg_png)
 ```
 
 It may be helpful to check the distribution of the index. Its histogram and boxplot are provided below.
