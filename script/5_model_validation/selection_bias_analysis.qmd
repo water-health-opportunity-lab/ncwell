@@ -1,0 +1,129 @@
+---
+title: "Assessing selection bias in the validation dataset"
+format: html
+toc: true
+editor: visual
+code-fold: true
+warning: false 
+message: false
+self-contained: true
+tabset: true
+---
+
+## Introduction
+
+### Note from reviewers
+
+\*Selection bias in the validation dataset (Section 2.3, lines 233-257; Section 5, lines 531-552).
+
+The well-testing dataset is based on voluntary and opportunistic sample submissions. The authors rightly acknowledge this in the Discussion, but the implications for the validity of the entire supervised component of the framework are insufficiently addressed. The supervised step (LASSO feature selection and logistic regression) is trained on these same biased labels. If the probability of testing is correlated with any of the predictor variables (e.g., areas with higher social capacity may test more), this creates a fundamental endogeneity problem that cannot be resolved simply by noting the limitation. The authors should:
+
+-   Provide a descriptive comparison of the spatial and sociodemographic characteristics of tested versus untested grid cells to assess the degree of selection.
+
+-   Discuss how training on biased labels may have influenced which PCs were selected and the resulting index weights.
+
+-   Consider a sensitivity analysis (e.g., varying the assumed contamination rate among untested wells).
+
+```{r}
+# Load packages
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+
+# Load data
+test_sites <- st_read('well_tests_filtered.gpkg')
+index_capacity <- st_read('nc_grid_capacity_imputed.gpkg')
+index_hazard <- st_read('nc_grid_hazard_imputed.gpkg')
+index_vulnerability <- st_read('nc_grid_vulnerability_imputed.gpkg')
+```
+
+```{r}
+# Align CRS
+index_capacity <- st_transform(index_capacity, st_crs(test_sites))
+index_vulnerability <- st_transform(index_vulnerability, st_crs(test_sites))
+index_hazard <- st_transform(index_hazard, st_crs(test_sites))
+
+# Join index gpkgs and test_sites by geometry
+index_capacity <- st_join(index_capacity, test_sites[, c("EIN")], join = st_intersects)
+index_capacity$tested <- !is.na(index_capacity$EIN)
+
+index_hazard <- st_join(index_hazard, test_sites[, c("EIN")], join = st_intersects)
+index_hazard$tested <- !is.na(index_hazard$EIN)
+
+index_vulnerability <- st_join(index_vulnerability, test_sites[, c("EIN")], join = st_intersects)
+index_vulnerability$tested <- !is.na(index_vulnerability$EIN)
+```
+
+## Statistical tests
+
+Wilcoxon rank sum test for continuous variables and chi-square test for categorical variables
+
+### Capacity module
+
+```{r}
+results <- list()
+
+for(i in 4:26) {
+  col_name <- names(index_capacity)[i]
+  results[[col_name]] <- wilcox.test(index_capacity[[col_name]] ~ index_capacity$tested)
+}
+
+summary_table <- imap_dfr(results, function(res, name) {
+  data.frame(
+    Variable = name,
+    W_stat = res$statistic,
+    P_value = res$p.value,
+
+    Significant = ifelse(res$p.value < 0.05, "Yes*", "No")
+  )
+})
+
+print(summary_table)
+```
+
+### Hazard module
+
+```{r}
+results <- list()
+
+for(i in 3:9) {
+  col_name <- names(index_hazard)[i]
+  results[[col_name]] <- wilcox.test(index_hazard[[col_name]] ~ index_hazard$tested)
+}
+
+summary_table <- imap_dfr(results, function(res, name) {
+  data.frame(
+    Variable = name,
+    W_stat = res$statistic,
+    P_value = res$p.value,
+
+    Significant = ifelse(res$p.value < 0.05, "Yes*", "No")
+  )
+})
+
+print(summary_table)
+```
+
+### Vulnerability module
+
+```{r}
+results <- list()
+
+for(i in 4:26) {
+  col_name <- names(index_capacity)[i]
+  results[[col_name]] <- wilcox.test(index_capacity[[col_name]] ~ index_capacity$tested)
+}
+
+summary_table <- imap_dfr(results, function(res, name) {
+  data.frame(
+    Variable = name,
+    W_stat = res$statistic,
+    P_value = res$p.value,
+
+    Significant = ifelse(res$p.value < 0.05, "Yes*", "No")
+  )
+})
+
+print(summary_table)
+```
