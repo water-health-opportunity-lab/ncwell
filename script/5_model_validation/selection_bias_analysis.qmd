@@ -168,7 +168,7 @@ print(summary_hazard_cont)
 results_hazard_cat <- list()
 
 for(i in c(10)) {
-  index_vulnerability[[col_name]] <- as.character(index_vulnerability[[col_name]])
+  index_hazard[[col_name]] <- as.character(index_hazard[[col_name]])
   col_name <- names(index_hazard)[i]
   results_hazard_cat[[col_name]] <- chisq.test(table(index_hazard$tested, index_hazard[[col_name]]))
 }
