@@ -24,26 +24,63 @@ The well-testing dataset is based on voluntary and opportunistic sample submissi
 
 -   Consider a sensitivity analysis (e.g., varying the assumed contamination rate among untested wells).
 
+## Preprocessing
 ```{r}
 # Load packages
 library(sf)
 library(dplyr)
 library(ggplot2)
 library(purrr)
+library(stringr)
 
 # Load data
 test_sites <- st_read('well_tests_filtered.gpkg')
-index_capacity <- st_read('nc_grid_capacity_imputed.gpkg')
-index_hazard <- st_read('nc_grid_hazard_imputed.gpkg')
-index_vulnerability <- st_read('nc_grid_vulnerability_imputed.gpkg')
+index_c <- st_read('nc_grid_capacity_imputed.gpkg')
+index_h <- st_read('nc_grid_hazard_imputed.gpkg')
+index_v <- st_read('nc_grid_vulnerability_imputed.gpkg')
+
+# Align CRS
+index_c <- st_transform(index_c, st_crs(test_sites))
+index_h <- st_transform(index_h, st_crs(test_sites))
+index_v <- st_transform(index_v, st_crs(test_sites))
+```
+
+### Extracting boundaries of the target counties
+```{r}
+target_counties <- c("Alexander County", "Alleghany County","Ashe County","Avery County",
+                      "Buncombe County","Burke County","Caldwell County","Catawba County",
+                      "Clay County","Cleveland County","Gaston County","Haywood County",
+                      "Henderson County","Jackson County","Lincoln County","Macon County",
+                      "Madison County","Mcdowell County","Mitchell County","Polk County",
+                      "Rutherford County","Transylvania County","Watauga County","Wilkes County",
+                      "Yancey County")
+
+NC_counties <- tigris::counties(state = "NC", year = 2024)
+western_counties <- NC_counties %>% filter(NAMELSAD %in% target_counties)
+
+index_c <- index_c %>% mutate(county_raw = str_extract(block_group_name, "[A-Za-z .’-]+ County"),
+                          county_norm = str_squish(str_to_title(county_raw)))
+index_capacity <- index_c %>% filter(!is.na(county_norm) & county_norm %in% target_counties)
+
+#index_h$block_group_name <- index_c$block_group_name
+#index_h <- index_h %>% mutate(county_raw = str_extract(block_group_name, "[A-Za-z .’-]+ County"),
+#                          county_norm = str_squish(str_to_title(county_raw)))
+#index_hazard <- index_h %>% filter(!is.na(county_norm) & county_norm %in% target_counties)
+
+western_counties <- st_transform(western_counties, st_crs(test_sites))
+
+index_hazard <- st_filter(index_h, western_counties, .predicate = st_within)
+
+#index_v <- index_v %>% mutate(county_raw = str_extract(block_group_name, "[A-Za-z .’-]+ County"),
+#                          county_norm = str_squish(str_to_title(county_raw)))
+#index_capacity <- index_v %>% filter(!is.na(county_norm) & county_norm %in% target_counties)
+
+western_counties <- st_transform(western_counties, st_crs(test_sites))
+
+index_vulnerability <- st_filter(index_v, western_counties, .predicate = st_within)
 ```
 
 ```{r}
-# Align CRS
-index_capacity <- st_transform(index_capacity, st_crs(test_sites))
-index_vulnerability <- st_transform(index_vulnerability, st_crs(test_sites))
-index_hazard <- st_transform(index_hazard, st_crs(test_sites))
-
 # Join index gpkgs and test_sites by geometry
 index_capacity <- st_join(index_capacity, test_sites[, c("EIN")], join = st_intersects)
 index_capacity$tested <- !is.na(index_capacity$EIN)
@@ -62,68 +99,177 @@ Wilcoxon rank sum test for continuous variables and chi-square test for categori
 ### Capacity module
 
 ```{r}
-results <- list()
+results_capacity <- list()
 
-for(i in 4:26) {
+# The full range of variables is 4:26
+# The table below excludes pct_women, pct_single_parent, pct_under_17, pct_woman_gave_birth, pct_us_born, pct_active_commuting, pct_no_move, pct_crowded_housing, pct_no_computer, housing_units_density
+for(i in c(4, 6, 9, 10, 11, 13, 14, 16, 18, 21, 22, 23, 24)) {
   col_name <- names(index_capacity)[i]
-  results[[col_name]] <- wilcox.test(index_capacity[[col_name]] ~ index_capacity$tested)
+  results_capacity[[col_name]] <- wilcox.test(index_capacity[[col_name]] ~ index_capacity$tested)
 }
 
-summary_table <- imap_dfr(results, function(res, name) {
+summary_capacity <- imap_dfr(results_capacity, function(res, name) {
   data.frame(
     Variable = name,
+    Mean = mean(index_capacity[[name]]),
+    SD = sd(index_capacity[[name]]),
+    Q1 = quantile(index_capacity[[name]], 0.25),
+    Q3 = quantile(index_capacity[[name]], 0.75),
     W_stat = res$statistic,
-    P_value = res$p.value,
-
-    Significant = ifelse(res$p.value < 0.05, "Yes*", "No")
+    p_value = res$p.value
   )
 })
 
-print(summary_table)
+# p-value adjustment with Benjamini-Hochberg
+p_values <- sapply(results_capacity, function(col) col$p.value)
+adj_p <- p.adjust(p_values, method = "BH")
+
+summary_capacity$Adj_p_value = adj_p
+summary_capacity$Significant = ifelse(summary_capacity$Adj_p_value < 0.05, "*", "")
+rownames(summary_capacity) <- NULL
+
+print(summary_capacity)
 ```
 
 ### Hazard module
 
 ```{r}
-results <- list()
+# Continuous variables
+results_hazard_cont <- list()
 
 for(i in 3:9) {
   col_name <- names(index_hazard)[i]
-  results[[col_name]] <- wilcox.test(index_hazard[[col_name]] ~ index_hazard$tested)
+  results_hazard_cont[[col_name]] <- wilcox.test(index_hazard[[col_name]] ~ index_hazard$tested)
 }
 
-summary_table <- imap_dfr(results, function(res, name) {
+summary_hazard_cont <- imap_dfr(results_hazard_cont, function(res, name) {
   data.frame(
     Variable = name,
+    Mean = mean(index_hazard[[name]]),
+    SD = sd(index_hazard[[name]]),
+    Q1 = quantile(index_hazard[[name]], 0.25),
+    Q3 = quantile(index_hazard[[name]], 0.75),
     W_stat = res$statistic,
-    P_value = res$p.value,
-
-    Significant = ifelse(res$p.value < 0.05, "Yes*", "No")
+    p_value = res$p.value
   )
 })
 
-print(summary_table)
+# p-value adjustment with Benjamini-Hochberg
+p_values <- sapply(results_hazard_cont, function(col) col$p.value)
+adj_p <- p.adjust(p_values, method = "BH")
+
+summary_hazard_cont$Adj_p_value = adj_p
+summary_hazard_cont$Significant = ifelse(summary_hazard_cont$Adj_p_value < 0.05, "*", "")
+rownames(summary_hazard_cont) <- NULL
+
+print(summary_hazard_cont)
+
+# Categorical variables
+results_hazard_cat <- list()
+
+for(i in c(10)) {
+  index_vulnerability[[col_name]] <- as.character(index_vulnerability[[col_name]])
+  col_name <- names(index_hazard)[i]
+  results_hazard_cat[[col_name]] <- chisq.test(table(index_hazard$tested, index_hazard[[col_name]]))
+}
+
+get_mode <- function(x) {
+  unique_x <- unique(x)
+  unique_x[which.max(tabulate(match(x, unique_x)))]
+}
+
+summary_hazard_cat <- imap_dfr(results_hazard_cat, function(res, name) {
+  data.frame(
+    Variable = name,
+    Mode = get_mode(index_hazard[[name]]),
+    chi_square = res$statistic,
+    p_value = res$p.value
+  )
+})
+
+# p-value adjustment with Benjamini-Hochberg
+p_values <- sapply(results_hazard_cat, function(col) col$p.value)
+adj_p <- p.adjust(p_values, method = "BH")
+
+summary_hazard_cat$Adj_p_value = adj_p
+summary_hazard_cat$Significant = ifelse(summary_hazard_cat$Adj_p_value < 0.05, "*", "")
+rownames(summary_hazard_cat) <- NULL
+
+print(summary_hazard_cat)
 ```
 
 ### Vulnerability module
 
 ```{r}
-results <- list()
+# Variable indices
+cont_indices <- c(6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 47)
 
-for(i in 4:26) {
-  col_name <- names(index_capacity)[i]
-  results[[col_name]] <- wilcox.test(index_capacity[[col_name]] ~ index_capacity$tested)
+cat_indices <- c(3, 4, 5, 39, 45, 48)
+
+# Continuous variables
+results_vulnerability_cont <- list()
+
+for(i in cont_indices) {
+  col_name <- names(index_vulnerability)[i]
+  results_vulnerability_cont[[col_name]] <- wilcox.test(index_vulnerability[[col_name]] ~ index_vulnerability$tested)
 }
 
-summary_table <- imap_dfr(results, function(res, name) {
+summary_vulnerability_cont <- imap_dfr(results_vulnerability_cont, function(res, name) {
   data.frame(
     Variable = name,
+    Mean = mean(index_vulnerability[[name]]),
+    SD = sd(index_vulnerability[[name]]),
+    Q1 = quantile(index_vulnerability[[name]], 0.25),
+    Q3 = quantile(index_vulnerability[[name]], 0.75),
     W_stat = res$statistic,
-    P_value = res$p.value,
-
-    Significant = ifelse(res$p.value < 0.05, "Yes*", "No")
+    p_value = res$p.value
   )
 })
 
-print(summary_table)
+# p-value adjustment with Benjamini-Hochberg
+p_values <- sapply(results_vulnerability_cont, function(col) col$p.value)
+adj_p <- p.adjust(p_values, method = "BH")
+
+summary_vulnerability_cont$Adj_p_value = adj_p
+summary_vulnerability_cont$Significant = ifelse(summary_vulnerability_cont$Adj_p_value < 0.05, "*", "")
+rownames(summary_vulnerability_cont) <- NULL
+
+print(summary_vulnerability_cont)
+
+# Categorical variables
+results_vulnerability_cat <- list()
+
+for(i in cat_indices) {
+  index_vulnerability[[col_name]] <- as.character(index_vulnerability[[col_name]])
+  col_name <- names(index_vulnerability)[i]
+  results_vulnerability_cat[[col_name]] <- chisq.test(table(index_vulnerability$tested, index_vulnerability[[col_name]]))
+}
+
+summary_vulnerability_cat <- imap_dfr(results_vulnerability_cat, function(res, name) {
+  data.frame(
+    Variable = name,
+    Mode = get_mode(index_vulnerability[[name]]),
+    chi_square = res$statistic,
+    p_value = res$p.value
+  )
+})
+
+# p-value adjustment with Benjamini-Hochberg
+p_values <- sapply(results_vulnerability_cat, function(col) col$p.value)
+adj_p <- p.adjust(p_values, method = "BH")
+
+summary_vulnerability_cat$Adj_p_value = adj_p
+summary_vulnerability_cat$Significant = ifelse(summary_vulnerability_cat$Adj_p_value < 0.05, "*", "")
+rownames(summary_vulnerability_cat) <- NULL
+
+print(summary_vulnerability_cat)
+```
+
+### All modules
+```{r}
+summary_all_cont <- rbind(summary_capacity, summary_hazard_cont, summary_vulnerability_cont)
+print(summary_all_cont)
+
+summary_all_cat <- rbind(summary_hazard_cat, summary_vulnerability_cat)
+print(summary_all_cat)
 ```
