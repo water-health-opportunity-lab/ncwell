@@ -10,19 +10,25 @@ self-contained: true
 tabset: true
 ---
 
+## Introduction
+
+Recall that we applied constrained PCA to obtain principal components (PCs) whose directions align with the expected relationship to contamination risk. Constraints were only imposed on variables with known directional associations (positive or negative) with risk; variables without such expectations were left unconstrained. Note that we did not apply varimax rotation as such rotation does not preserve the sign constraints we impose.
+
+In this report, we use the validation dataset to guide the construction of a composite risk score based on these PCs. The analysis proceeds as follows. We first divide the validation dataset into training and testing subsets. The outcome variable is binary, indicating total coliform detection (detect vs. non-detect). Using the training data, we conduct two analyses.
+
+1.  **Model comparison**: We fit three random-forest models: (a) a model that uses only the PCs, (b) a model that uses all original variables from the physical vulnerability, social capacity, and hazard modules, and (c) a model that uses only the first PC from each module. If models (a) and (b) exhibit similar performance, this provides evidence that constrained PCA effectively preserves the relevant predictive information. If both (a) and (b) outperform model (c), this indicates that relying solely on the first PC from each module is insufficient for explaining contamination risk.
+
+2.  **Index construction**: To derive a one-dimensional index for each module, we apply the LASSO method to determine the optimal weights for the PCs based on contamination risk. The resulting weighted combination of PCs is standardized to form a numerical index for each module.
+
+Finally, we compute the composite contamination risk score as $$
+\text{Risk} = \text{Physical Vulnerability} + \text{Hazard} - \text{Social Capacity}
+$$ We then use the testing dataset to conduct a two-sample test comparing the mean (or central tendency) of the risk score between detect and non-detect groups.
+
+## Data Preprocessing
+
+We perform a stratified sampling procedure to split the validation dataset into training and testing subsets in a 1:1 ratio, ensuring that both subsets preserve the same proportion of positive and negative coliform samples as in the original dataset.
+
 ```{r}
-# ----------------------------------------
-# R Script to validate overall risk index using NCDHHS well testing results for E. coli and Total Coliform
-# Author: Jennifer Zhang
-# Last edited: 2025-08-14
-# ----------------------------------------
-```
-
-### 1.1 Load packages and data
-
-First, we load the data below and prepare it for the analysis.
-
-```{r, include=FALSE}
 # Load packages
 library(sf)
 library(dplyr)
@@ -34,483 +40,1234 @@ library(cutpointr)
 library(rpart)
 library(rpart.plot)
 library(arm)
+library(caret)
+library(glmnet)
+library(pROC)
+# read data
+data <- st_read("validation.gpkg")
+data$time <- as.numeric(data$Date_Collected - as.Date("2024-09-25"))
+vul_dat <- st_read("index_vulnerability_detailed.gpkg")
+haz_dat <- st_read("index_hazard_detailed.gpkg")
+cap_dat <- st_read("index_capacity_detailed.gpkg")
+
+# ---------------------------
+# Outcome definition
+# ---------------------------
+data$coliform <- ifelse(data$Coliform_Result_Binary == "Present", 1, 0)
+
+vul_tab <- sf::st_drop_geometry(vul_dat)
+haz_tab <- sf::st_drop_geometry(haz_dat)
+cap_tab <- sf::st_drop_geometry(cap_dat)
+
+merged_data <- data %>%
+  dplyr::left_join(vul_tab, by = "grid_id") %>%
+  dplyr::left_join(haz_tab, by = "grid_id") %>%
+  dplyr::left_join(cap_tab, by = "grid_id") %>%
+  # remove duplicate join suffixes
+  dplyr::select(
+    -tidyselect::matches("\\.x$"),
+    -tidyselect::matches("\\.y$"),
+    -tidyselect::matches("\\.x\\.x$"),
+    -tidyselect::matches("\\.y\\.y$")
+  ) %>%
+  # drop obvious non-predictors / outcomes
+  dplyr::select(
+    -tidyselect::any_of(c(
+      "System_Name", "Street_Address", "City", "State", "Zip",
+      "Street_Address_Concat", "EIN", "StarLiMS_ID",
+      "Date_Collected", "Sampling_Point", "Comment",
+      "Accuracy", "Accuracy_Type", "grid_id",
+      "index_vulnerability", "index_hazard", "index_capacity",
+      "risk", "Total_Coliform_Result", "Ecoli_Result"
+    ))
+  ) %>%
+  # drop geometry if still present
+  sf::st_drop_geometry() %>%
+  # drop all A_* variables and specific unwanted columns
+  dplyr::select(
+    -tidyselect::starts_with("A_"),
+    -tidyselect::any_of(c(
+      "Ecoli_Result_Binary",
+      "Coliform_Result_Binary",
+      "ecoli",
+      "y_fake"
+    ))
+  )
+
+# ---------------------------
+# Remove all-NA / constant columns (helps fitting)
+# ---------------------------
+is_all_na   <- vapply(merged_data, function(x) all(is.na(x)), logical(1))
+is_const    <- vapply(merged_data, function(x) length(unique(na.omit(x))) <= 1, logical(1))
+merged_data <- merged_data[, !(is_all_na | is_const), drop = FALSE]
+
+# Characters -> factors; ensure binary 0/1 outcome
+merged_data[] <- lapply(merged_data, function(x) if (is.character(x)) factor(x) else x)
+stopifnot("coliform" %in% names(merged_data))
+merged_data$coliform <- as.integer(merged_data$coliform == 1)
+stopifnot(length(unique(merged_data$coliform)) == 2)
+
+# ================================================================
+# 4:1 STRATIFIED TRAIN-TEST SPLIT (80/20)
+# ================================================================
+# set.seed(218)
+set.seed(403)
+train_idx <- caret::createDataPartition(merged_data$coliform, p = 0.6, list = FALSE)
+train_dat <- merged_data[train_idx, , drop = FALSE]
+test_dat  <- merged_data[-train_idx, , drop = FALSE]
+
+cat(sprintf("Training size: %d | Testing size: %d\n", nrow(train_dat), nrow(test_dat)))
+cat(sprintf("Class balance (train): %.2f%% positives\n", 100 * mean(train_dat$coliform)))
+cat(sprintf("Class balance (test):  %.2f%% positives\n", 100 * mean(test_dat$coliform)))
 ```
 
-```{r, include=FALSE}
-# Read files
-risk <- st_read("nc_grid_index.gpkg")
+## Model Comparison
 
-risk_capacity <- st_read("index_capacity.gpkg")
-risk_hazard <- st_read("index_hazard.gpkg")
-risk_vulnerability <- st_read("index_vulnerability.gpkg")
+Next, we compare three random-forest models. They differ in the covariates used.
 
-microbio_data_hurricane <- read.csv("ecoli_coords_hurricane.csv", strip.white = TRUE)
-microbio_data_microbiology <- read.csv("ecoli_coords_microbio.csv", strip.white = TRUE)
-```
+1.  The first model uses the principal components (PCs) from each module, where the number of PCs is selected to explain at least 80% of the variance within that module. This results in 29 PCs for physical vulnerability, 10 PCs for social capacity, and 6 PCs for hazard.
 
-```{r collapse = TRUE}
-# Join NCDHHS and risk index for microbio_data_hurricane
-microbio_sf_hurricane <- st_as_sf(microbio_data_hurricane, coords = c("Longitude", "Latitude"), crs = 4326)
-microbio_proj_hurricane <- st_transform(microbio_sf_hurricane, st_crs(risk))
+2.  The second model uses all original variables from the three modules without applying dimensionality reduction.
 
-microbio_with_risk_hurricane <- st_join(microbio_proj_hurricane, risk, join = st_within) %>%
-  # Filter out empty results
-  filter(!is.na(risk)) %>%
-  filter(!Ecoli_Result %in% c("Not Tested", ""))
+3.  The third model uses only the first PC from each module. We refer to this as the “unsupervised’’ approach because these individual PCs are used directly as composite indices, similar to the construction of a social vulnerability index, and their formation is not guided by supervised learning.
 
-n_pre_filter_hurricane <- nrow(microbio_with_risk_hurricane)
+Each model also includes the number of days since Hurricane Helene affected North Carolina.
 
-microbio_with_risk_hurricane$Date_Collected <- mdy(microbio_with_risk_hurricane$Date_Collected)
-microbio_with_risk_hurricane <- microbio_with_risk_hurricane %>%
-  # Filter out tests from the same sampling site, only keeping the oldest sample
-  group_by(Street_Address) %>%
-  arrange(Date_Collected) %>%
-  slice(1) %>%
-  ungroup()
+For each model, we first train an initial random forest using default settings to obtain variable importance scores. To reduce noise and focus on the most informative predictors, we retain only variables whose importance is at or above the 25th percentile of the importance distribution. A refined random forest is then trained using only these screened predictors. Hyperparameters---specifically, the number of variables randomly sampled at each split (\\texttt{mtry}) and the minimum terminal node size (\\texttt{nodesize})---are tuned using 5-fold cross-validation, with the optimal combination selected based on the highest cross-validated area under the ROC curve (AUC). A final tuned random forest is then fitted on the full training dataset, and the decision threshold is chosen to maximize the F1-score on the training data.
 
-n_post_filter_hurricane <- nrow(microbio_with_risk_hurricane)
+We compare the three models using the AUC computed on the testing dataset. If the PC-based model achieves an AUC comparable to that of the model using all original variables, this indicates that the dimensionality reduction via PCA preserves most of the predictive information relevant for modeling contamination risk.
 
-# Join NCDHHS and risk index for microbio_data_microbiology
-microbio_sf_microbiology <- st_as_sf(microbio_data_microbiology, coords = c("Longitude", "Latitude"), crs = 4326)
-microbio_proj_microbiology <- st_transform(microbio_sf_microbiology, st_crs(risk))
+The results for the area under the curve (AUC) and the receiver operating characteristic (ROC) curve are summarized below. The model using only the principal components (PCs) achieves an AUC of 0.645 and an F1-score of 0.449, while the model using all original variables attains an AUC of 0.621 and an F1-score of 0.421. These results suggest that the dimensionality-reduced representation retains most of the predictive information.\
 
-microbio_with_risk_microbiology <- st_join(microbio_proj_microbiology, risk, join = st_within) %>%
-  # Filter out empty results
-  filter(!is.na(risk)) %>%
-  filter(!Ecoli_Result %in% c("Not Tested", "")) 
-
-n_pre_filter_microbio <- nrow(microbio_with_risk_microbiology)
-
-microbio_with_risk_microbiology$Date_Collected <- mdy(microbio_with_risk_microbiology$Date_Collected)
-microbio_with_risk_microbiology <- microbio_with_risk_microbiology %>%
-  # Filter out tests from the same sampling site, only keeping the oldest sample
-  group_by(Street_Address) %>%
-  arrange(Date_Collected) %>%
-  slice(1) %>%
-  ungroup()
-
-n_post_filter_microbio <- nrow(microbio_with_risk_microbiology)
-```
-
-`{r} n_pre_filter_hurricane - n_post_filter_hurricane` samples were filtered out from the Hurricane Helene dataset. `{r} n_pre_filter_microbio - n_post_filter_microbio` samples were filtered out from the general microbiology dataset.
-
-Some of the addresses were not fully reported (i.e. only street or road names were included in the NCDHHS report) and this was reflected after geocoding. However, we will proceed without filtering out testing locations with a geocoding accuracy score of less than 0.8 (as per the Geocod.io documentation) due to the 1 km x 1 km resolution of the risk index.
-
-### 1.2 Description of sampling sites
-
-The plot of sampling sites below shows that the samples tested during the [Hurricane Helene testing program](https://celr.dph.ncdhhs.gov/hurricaneHelene) (shown in [**purple**]{style="color:purple;"}) were primarily collected in western counties of North Carolina. Meanwhile, the samples collected as part of the general microbiology testing program (shown in [**orange**]{style="color:orange;"}) are distributed across all of North Carolina.
+In comparison, the unsupervised approach yields an AUC of 0.590 and an F1-score of 0.415. Relative to both the PC-only and non-PC models, this indicates that relying solely on the first PC from each module is not sufficient for predicting contamination risk.
 
 ```{r}
-# Plot locations of well sampling sites
-plot(st_geometry(risk), col = 'lightblue', border = NA)
-plot(st_geometry(microbio_proj_microbiology), col = 'orange', add = TRUE)
-plot(st_geometry(microbio_proj_hurricane), col = 'purple', add = TRUE)
+###############################################################################
+# Tuned Random Forest (randomForest only)
+#
+# - PC-only vs Non-PC vs Unsupervised (haz_PC1, vul_PC1, cap_PC1, time)
+# - Step 1: Align TRAIN/TEST, impute, and harmonize factor levels
+# - Step 2: Stratified k-fold CV to tune (mtry, nodesize) by AUC
+# - Step 3: Fit final RF with tuned hyperparameters
+# - Step 4: Choose probability cutoff via F1 on TRAIN
+# - Randomness in CV folds and RF training is controlled by `rf_seed`
+# - Report Train/Test AUC & F1; plot TEST ROC curves
+###############################################################################
+
+suppressPackageStartupMessages({
+  library(randomForest)
+  library(pROC)
+})
+
+# ================================================================
+# Helpers: alignment / preprocessing
+# ================================================================
+coerce_numeric_like <- function(x) {
+  if (is.factor(x)) {
+    suppressWarnings({
+      y <- as.numeric(as.character(x))
+    })
+    if (!all(is.na(y))) return(y)
+  }
+  x
+}
+
+fct_mode <- function(f) {
+  tab <- table(f)
+  names(tab)[which.max(tab)]
+}
+
+normalize_empty_to_na <- function(x) {
+  if (!is.character(x)) return(x)
+  x_trim <- trimws(x)
+  x_trim[x_trim %in% c("", "NA", "N/A", "na", "n/a", "<NA>")] <- NA_character_
+  x_trim
+}
+
+# Align TRAIN and TEST on a given set of predictors, with "__OTHER__" bucket for new test levels
+impute_and_align <- function(train, test, vars,
+                             outcome = "coliform",
+                             other   = "__OTHER__") {
+  # Only keep predictors that exist in BOTH sets
+  use_vars <- intersect(vars, intersect(names(train), names(test)))
+  if (length(use_vars) == 0L)
+    stop("No overlapping variables between train/test for alignment.")
+
+  tr <- train[, c(outcome, use_vars), drop = FALSE]
+  te <- test[,  c(outcome, use_vars), drop = FALSE]
+
+  # Coerce numeric-like factors to numeric
+  tr[] <- lapply(tr, coerce_numeric_like)
+  te[] <- lapply(te, coerce_numeric_like)
+
+  # Normalize empty strings in character columns
+  tr[] <- lapply(tr, function(x) if (is.character(x)) normalize_empty_to_na(x) else x)
+  te[] <- lapply(te, function(x) if (is.character(x)) normalize_empty_to_na(x) else x)
+
+  common <- setdiff(intersect(names(tr), names(te)), outcome)
+
+  for (v in common) {
+    if (is.numeric(tr[[v]]) || is.integer(tr[[v]])) {
+      # numeric: median imputation
+      med <- suppressWarnings(median(tr[[v]], na.rm = TRUE))
+      if (!is.finite(med)) med <- 0
+      tr[[v]][is.na(tr[[v]])] <- med
+      te[[v]][is.na(te[[v]])] <- med
+
+      if (!(is.numeric(te[[v]]) || is.integer(te[[v]]))) {
+        suppressWarnings(te[[v]] <- as.numeric(as.character(te[[v]])))
+        te[[v]][is.na(te[[v]])] <- med
+      }
+
+    } else {
+      # treat as categorical
+      tr_chr <- as.character(tr[[v]])
+      te_chr <- as.character(te[[v]])
+
+      tr_mode <- fct_mode(factor(tr_chr))
+      tr_chr[is.na(tr_chr)] <- tr_mode
+      te_chr[is.na(te_chr)] <- tr_mode
+
+      L_train <- sort(unique(tr_chr))
+      # map unseen test levels to OTHER
+      te_chr[!(te_chr %in% L_train)] <- other
+      L_full <- unique(c(L_train, other))
+
+      tr[[v]] <- factor(tr_chr, levels = L_full)
+      te[[v]] <- factor(te_chr, levels = L_full)
+    }
+  }
+
+  # Drop zero-variance columns in TRAIN (and mirror in TEST)
+  nzv <- vapply(tr[, common, drop = FALSE], function(x) {
+    if (is.numeric(x) || is.integer(x)) sd(x, na.rm = TRUE) > 0
+    else if (is.factor(x)) length(unique(x)) > 1
+    else TRUE
+  }, logical(1))
+
+  keep <- names(which(nzv))
+  tr <- tr[, c(outcome, keep), drop = FALSE]
+  te <- te[, c(outcome, keep), drop = FALSE]
+
+  list(train = tr, test = te)
+}
+
+# ================================================================
+# Outcome & metric helpers
+# ================================================================
+# Encode outcome as "pos"/"neg"
+make_posneg <- function(y) {
+  y_chr   <- as.character(y)
+  pos_vals <- c("1","TRUE","T","Yes","Y","pos","Pos","positive","case")
+  factor(ifelse(y_chr %in% pos_vals, "pos", "neg"), levels = c("pos","neg"))
+}
+
+# For pROC: negative first, positive second
+make_negpos_for_pROC <- function(y_posneg) {
+  factor(ifelse(y_posneg == "pos", "pos", "neg"), levels = c("neg","pos"))
+}
+
+roc_auc_pair <- function(y_negpos, prob_pos) {
+  r <- pROC::roc(response = y_negpos, predictor = prob_pos,
+                 levels = c("neg","pos"), quiet = TRUE)
+  list(roc = r, auc = as.numeric(pROC::auc(r)))
+}
+
+f1_score <- function(y_true, y_pred) {
+  # y_true, y_pred: "pos"/"neg"
+  tp <- sum(y_true == "pos" & y_pred == "pos")
+  fp <- sum(y_true == "neg" & y_pred == "pos")
+  fn <- sum(y_true == "pos" & y_pred == "neg")
+
+  precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+  recall    <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+
+  if (precision + recall == 0) return(0)
+  2 * precision * recall / (precision + recall)
+}
+
+# Choose the probability cutoff that maximizes F1 on TRAIN
+optimal_f1_cutoff <- function(y_true_posneg, prob_pos) {
+  y_true_posneg <- factor(y_true_posneg, levels = c("pos","neg"))
+  cuts    <- seq(0.01, 0.99, by = 0.01)
+  f1_vals <- numeric(length(cuts))
+
+  for (i in seq_along(cuts)) {
+    pred <- ifelse(prob_pos >= cuts[i], "pos", "neg")
+    f1_vals[i] <- f1_score(y_true_posneg, pred)
+  }
+
+  cuts[which.max(f1_vals)]
+}
+
+# ================================================================
+# Stratified k-folds (manual, no caret)
+# ================================================================
+stratified_folds <- function(y, k = 5, seed = 123) {
+  set.seed(seed)
+  y  <- factor(y)
+  lv <- levels(y)
+  folds <- vector("list", k)
+  for (lev in lv) {
+    idx <- which(y == lev)
+    idx <- sample(idx, length(idx))
+    parts <- split(idx, rep(1:k, length.out = length(idx)))
+    for (i in seq_len(k)) {
+      folds[[i]] <- c(folds[[i]], parts[[i]])
+    }
+  }
+  lapply(folds, sort)
+}
+
+# ================================================================
+# CV tuning for randomForest: tune mtry & nodesize by AUC
+# Randomness controlled by `rf_seed`
+# ================================================================
+cv_tune_rf <- function(train_df, mtry_grid, nodesize_grid,
+                       k = 5, ntree = 2000,
+                       quiet = FALSE, rf_seed = 123) {
+
+  y     <- make_posneg(train_df$coliform)
+  folds <- stratified_folds(y, k = k, seed = rf_seed)
+
+  p <- ncol(train_df) - 1L
+  mtry_grid     <- sort(unique(pmax(1L, pmin(p, as.integer(mtry_grid)))))
+  nodesize_grid <- sort(unique(as.integer(nodesize_grid)))
+
+  res_tbl <- data.frame(
+    mtry     = integer(),
+    nodesize = integer(),
+    mean_auc = numeric()
+  )
+
+  for (mtry_g in mtry_grid) {
+    for (nodesize_g in nodesize_grid) {
+
+      aucs <- numeric(length(folds))
+
+      for (i in seq_along(folds)) {
+
+        val_idx <- folds[[i]]
+        tr_idx  <- setdiff(seq_len(nrow(train_df)), val_idx)
+
+        tr <- train_df[tr_idx, , drop = FALSE]
+        va <- train_df[val_idx, , drop = FALSE]
+
+        tr$coliform <- make_posneg(tr$coliform)
+        va$coliform <- make_posneg(va$coliform)
+
+        # RF randomness determined by rf_seed
+        set.seed(rf_seed + mtry_g + nodesize_g + i)
+
+        rf <- randomForest(
+          coliform ~ ., data = tr,
+          ntree    = ntree,
+          mtry     = mtry_g,
+          nodesize = nodesize_g
+        )
+
+        prob_va <- as.numeric(predict(rf, va, type = "prob")[, "pos"])
+        roc_res <- roc_auc_pair(make_negpos_for_pROC(va$coliform), prob_va)
+        aucs[i] <- roc_res$auc
+      }
+
+      mean_auc <- mean(aucs, na.rm = TRUE)
+
+      if (!quiet) {
+        cat(sprintf("[CV] seed=%d | mtry=%d nodesize=%d -> AUC=%.3f\n",
+                    rf_seed, mtry_g, nodesize_g, mean_auc))
+      }
+
+      res_tbl <- rbind(
+        res_tbl,
+        data.frame(mtry = mtry_g,
+                   nodesize = nodesize_g,
+                   mean_auc = mean_auc)
+      )
+    }
+  }
+
+  best <- res_tbl[which.max(res_tbl$mean_auc), , drop = FALSE]
+  best
+}
+
+# ================================================================
+# Fit tuned RF using best (mtry, nodesize); cutoff via TRAIN F1
+# Randomness controlled by `rf_seed`
+# ================================================================
+fit_rf_tuned <- function(train_df, test_df,
+                         best_mtry, best_nodesize,
+                         ntree = 2000, quiet = FALSE,
+                         rf_seed = 123) {
+
+  train_df$coliform <- make_posneg(train_df$coliform)
+  test_df$coliform  <- make_posneg(test_df$coliform)
+
+  # RF seed controls final model randomness
+  set.seed(rf_seed)
+
+  rf_mod <- randomForest(
+    coliform ~ ., data = train_df,
+    ntree    = ntree,
+    mtry     = best_mtry,
+    nodesize = best_nodesize
+  )
+
+  prob_tr <- as.numeric(predict(rf_mod, train_df, type = "prob")[, "pos"])
+  prob_te <- as.numeric(predict(rf_mod, test_df,  type = "prob")[, "pos"])
+
+  # Cutoff chosen to maximize F1 on TRAIN
+  best_cut <- optimal_f1_cutoff(train_df$coliform, prob_tr)
+
+  # AUCs
+  roc_tr <- roc_auc_pair(make_negpos_for_pROC(train_df$coliform), prob_tr)
+  roc_te <- roc_auc_pair(make_negpos_for_pROC(test_df$coliform),  prob_te)
+
+  # F1 using training-optimal cutoff
+  pred_tr <- ifelse(prob_tr >= best_cut, "pos", "neg")
+  pred_te <- ifelse(prob_te >= best_cut, "pos", "neg")
+  f1_tr   <- f1_score(train_df$coliform, pred_tr)
+  f1_te   <- f1_score(test_df$coliform,  pred_te)
+
+  if (!quiet) {
+    cat(sprintf(
+      "[FINAL RF] seed=%d | mtry=%d nodesize=%d cutoff=%.2f | Train AUC=%.3f, F1=%.3f | Test AUC=%.3f, F1=%.3f\n",
+      rf_seed, best_mtry, best_nodesize, best_cut,
+      roc_tr$auc, f1_tr,
+      roc_te$auc, f1_te
+    ))
+  }
+
+  list(
+    model      = rf_mod,
+    auc_train  = roc_tr$auc,
+    auc_test   = roc_te$auc,
+    f1_train   = f1_tr,
+    f1_test    = f1_te,
+    prob_train = prob_tr,
+    prob_test  = prob_te,
+    cutoff     = best_cut,
+    roc_train  = roc_tr$roc,
+    roc_test   = roc_te$roc
+  )
+}
+
+# ================================================================
+# Helper: extract importance vector (MeanDecreaseGini)
+# (currently unused, kept for possible future diagnostics)
+# ================================================================
+get_importance_vector <- function(rf_obj) {
+  imp <- randomForest::importance(rf_obj, type = 2)  # type=2: Gini
+  if (is.matrix(imp)) {
+    if ("MeanDecreaseGini" %in% colnames(imp)) {
+      imp_vec <- imp[, "MeanDecreaseGini"]
+    } else {
+      imp_vec <- imp[, 1L]
+    }
+  } else {
+    imp_vec <- imp
+  }
+  imp_vec <- as.numeric(imp_vec)
+  names(imp_vec) <- rownames(imp)
+  imp_vec
+}
+
+# ================================================================
+# Run a block: PC-only, Non-PC, or Unsupervised
+#   Step 1: Align TRAIN/TEST
+#   Step 2: CV tune RF on all aligned predictors
+#   Step 3: Fit final tuned RF
+#   Randomness controlled by `rf_seed`
+# ================================================================
+run_block <- function(vars, tag,
+                      ntree = 2000,
+                      quiet = FALSE,
+                      rf_seed = 123) {
+
+  pair <- impute_and_align(train_dat, test_dat, vars)
+
+  train_red <- pair$train
+  test_red  <- pair$test
+
+  p <- ncol(train_red) - 1L
+  mtry_grid <- unique(round(c(sqrt(p)/2, sqrt(p), 2 * sqrt(p), p / 3)))
+  mtry_grid <- pmax(1L, pmin(p, mtry_grid))
+  nodesize_grid <- c(1, 3, 5, 10, 20)
+
+  if (!quiet) {
+    cat(sprintf("\n===== %s — CV tuning (seed=%d) =====\n", tag, rf_seed))
+  }
+  best <- cv_tune_rf(train_red, mtry_grid, nodesize_grid,
+                     k = 5, ntree = ntree,
+                     quiet = quiet, rf_seed = rf_seed)
+
+  if (!quiet) {
+    cat(sprintf("Best params for %s: mtry=%d, nodesize=%d (mean CV AUC=%.3f)\n",
+                tag, best$mtry, best$nodesize, best$mean_auc))
+    cat(sprintf("===== %s — Fit final tuned RF (seed=%d) =====\n", tag, rf_seed))
+  }
+
+  fit <- fit_rf_tuned(train_red, test_red,
+                      best_mtry     = best$mtry,
+                      best_nodesize = best$nodesize,
+                      ntree  = ntree,
+                      quiet  = quiet,
+                      rf_seed = rf_seed)
+
+  list(best = best, fit = fit)
+}
+
+# ================================================================
+# Feature sets
+#   (assumes train_dat/test_dat already defined by a fixed split)
+# ================================================================
+all_vars   <- setdiff(names(train_dat), "coliform")
+pc_vars    <- grep("_PC", all_vars, value = TRUE)
+nonpc_vars <- setdiff(all_vars, pc_vars)
+
+# ---- Drop specific social-capacity variables from Non-PC set ----
+drop_cap_vars <- c(
+  "pct_women",
+  "pct_single_parent",
+  "pct_under_17",
+  "pct_women_gave_birth",
+  "pct_us_born",
+  "pct_active_commuting",
+  "pct_no_move",
+  "pct_crowded_housing",
+  "pct_no_computer",
+  "housing_units_density"
+)
+nonpc_vars <- setdiff(nonpc_vars, drop_cap_vars)
+
+# ---- PC-only: time + all PCs ----
+pc_vars <- c("time", pc_vars)
+
+# ---- Unsupervised: haz_PC1, vul_PC1, cap_PC1, time ----
+unsup_vars <- c("time", "haz_PC1", "vul_PC1", "cap_PC1")
+
+# ================================================================
+# Run tuned RF for PC-only, Non-PC, and Unsupervised with chosen RF seed
+#   (RF randomness only; TRAIN/TEST split assumed fixed elsewhere)
+# ================================================================
+rf_seed_use <- 166
+
+res_pc <- run_block(pc_vars,    tag = "PC-only",
+                    ntree = 2000, quiet = TRUE,
+                    rf_seed = rf_seed_use)
+
+res_nonpc <- run_block(nonpc_vars, tag = "Non-PC",
+                       ntree = 2000, quiet = TRUE,
+                       rf_seed = rf_seed_use)
+
+res_unsup <- run_block(unsup_vars, tag = "Unsupervised",
+                       ntree = 2000, quiet = TRUE,
+                       rf_seed = rf_seed_use)
+
+# ================================================================
+# Final TEST ROC comparison: PC-only vs Non-PC vs Unsupervised
+# ================================================================
+if (!is.null(res_pc) && !is.null(res_nonpc) && !is.null(res_unsup)) {
+  plot(res_pc$fit$roc_test,
+       col = "magenta", lwd = 2,
+       main = "TEST ROC: PC-only vs Non-PC vs Unsupervised",
+       legacy.axes = TRUE)
+
+  plot(res_nonpc$fit$roc_test,
+       col = "deepskyblue", lwd = 2, add = TRUE)
+
+  # Unsupervised with indianred1
+  plot(res_unsup$fit$roc_test,
+       col = "indianred1", lwd = 2, add = TRUE)
+
+  abline(a = 0, b = 1, lty = 2)
+
+  legend("bottomright",
+         legend = c(
+           sprintf("PC-only        (AUC=%.3f, F1=%.3f, c=%.2f)",
+                   res_pc$fit$auc_test,    res_pc$fit$f1_test,    res_pc$fit$cutoff),
+           sprintf("Non-PC         (AUC=%.3f, F1=%.3f, c=%.2f)",
+                   res_nonpc$fit$auc_test, res_nonpc$fit$f1_test, res_nonpc$fit$cutoff),
+           sprintf("Unsupervised   (AUC=%.3f, F1=%.3f, c=%.2f)",
+                   res_unsup$fit$auc_test, res_unsup$fit$f1_test, res_unsup$fit$cutoff)
+         ),
+         col = c("magenta", "deepskyblue", "indianred1"),
+         lwd = 2, bty = "n")
+}
 ```
 
-### 1.3 Merge `microbio_with_risk_hurricane` and `microbio_with_risk_microbiology`
+## Index Construction
 
-Samples that were repeated in both `microbio_with_risk_hurricane` and `microbio_with_risk_microbiology` were filtered so there was only one occurrence in the overall `microbio_with_risk` dataset.
+Next, we apply logistic regression with a LASSO penalty to construct composite risk scores for the different modules. This framework is implemented in two ways: (1) using the PCs as predictors and (2) using the original non-PC variables. The tuning parameter $\lambda$ is selected via cross-validation based on the area under the ROC curve (AUC). Specifically, we choose the largest $\lambda$ whose cross-validated AUC lies within one standard error of the maximum (the \`\`1-SE rule''), resulting in a sparser yet near-optimal model.
 
-The table of sampling frequencies reveals that Orange County, Alamance County, and Chatham County have the largest sample sizes.
+### Supervised (PCs)
 
-```{r collapse = TRUE}
-# Combine raw datasets and remove out duplicates
-microbio_with_risk <- rbind(microbio_with_risk_hurricane, microbio_with_risk_microbiology) %>%
-  filter(!duplicated(StarLiMS_ID))
+We apply a logistic regression model with a LASSO penalty to estimate the relative weights of the PCs within each module. Sign constraints are imposed on the coefficients to ensure interpretability (positive for vulnerability and hazard, negative for capacity). To further enhance interpretability, we then choose the value of $\lambda$ along this path whose model size, measured by the number of nonzero coefficients, is closest to a target of five active PCs per module.
 
-# Sort by counties with most samples
-sort(table(microbio_with_risk$System_Name), decreasing = TRUE)
-```
-#### Check for the values in Ecoli_Result and Total_Coliform_Result
-
-```{r collapse = TRUE}
-# Check for unique values
-table(microbio_with_risk_hurricane$Ecoli_Result)
-table(microbio_with_risk_microbiology$Ecoli_Result)
-
-table(microbio_with_risk_hurricane$Total_Coliform_Result)
-table(microbio_with_risk_microbiology$Total_Coliform_Result)
-```
+To reduce sensitivity to any single train–test split, we repeat the logistic LASSO procedure 500 times across independent random splits within each module and retain only those PCs that are selected in more than half of the iterations through majority voting. Using the selected PCs within each module, we construct module-specific indices by forming weighted sums of these PCs, where the weights are obtained from sign-constrained logistic regression fitted on the training data.
 
 ```{r}
-# Separate binary and continuous testing results, remove rows where risk index is NA
-microbio_binary <- microbio_with_risk %>%
-  filter(Ecoli_Result %in% c("Absent", "Present")) %>%
-  rename(Ecoli_Result_Binary = Ecoli_Result) %>%
-  rename(Coliform_Result_Binary = Total_Coliform_Result)
+## ================================================================
+## PACKAGES
+## ================================================================
+suppressPackageStartupMessages({
+  if (!requireNamespace("glmnet", quietly = TRUE))
+    install.packages("glmnet", repos = "https://cloud.r-project.org")
+  if (!requireNamespace("pROC", quietly = TRUE))
+    install.packages("pROC", repos = "https://cloud.r-project.org")
+  if (!requireNamespace("caret", quietly = TRUE))
+    install.packages("caret", repos = "https://cloud.r-project.org")
+  if (!requireNamespace("dplyr", quietly = TRUE))
+    install.packages("dplyr", repos = "https://cloud.r-project.org")
+  library(glmnet)
+  library(pROC)
+  library(caret)
+  library(dplyr)
+})
 
-microbio_continuous <- microbio_with_risk %>%
-  filter(!(Ecoli_Result %in% c("Absent", "Present"))) %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "1"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1"), "Absent", "Present"))
+## ================================================================
+## SIMPLE LEAKAGE-SAFE IMPUTATION
+## ================================================================
+impute_full <- function(df, vars, outcome = "coliform") {
+  out <- df[, c(outcome, intersect(vars, names(df))), drop = FALSE]
+  out[] <- lapply(out, function(x) if (is.character(x)) factor(x) else x)
+  
+  for (v in setdiff(names(out), outcome)) {
+    if (is.numeric(out[[v]])) {
+      med <- suppressWarnings(stats::median(out[[v]], na.rm = TRUE))
+      if (!is.finite(med)) med <- 0
+      out[[v]][is.na(out[[v]])] <- med
+    } else {
+      if (!is.factor(out[[v]])) out[[v]] <- factor(out[[v]])
+      lev <- levels(out[[v]])
+      if (!("Missing" %in% lev)) lev <- c(lev, "Missing")
+      out[[v]] <- factor(out[[v]], levels = lev)
+      out[[v]][is.na(out[[v]])] <- "Missing"
+    }
+  }
+  out
+}
+
+## ================================================================
+## HELPER — COUNT NONZERO COEFFS (EXCLUDE INTERCEPT)
+## ================================================================
+count_nonzero <- function(beta_mat) {
+  sum(beta_mat[rownames(beta_mat) != "(Intercept)", 1] != 0)
+}
+
+## ================================================================
+## CORE FITTER: CONSTRAINED LOGISTIC LASSO ON PCs
+## ================================================================
+fit_lasso_module_pc_only <- function(
+    df, module_vars, outcome = "coliform",
+    pc_pattern = "PC", ignore_case = FALSE,
+    module_name = "module",
+    nfolds = 10,
+    lower.limits = -Inf,
+    upper.limits =  Inf,
+    # sparsity controls
+    dfmax = NULL, pmax = NULL,
+    penalty.factor = NULL,   # can be named; aligns safely below
+    use_1se = TRUE,
+    target_k = NULL          # try to pick λ giving ~k nonzeros
+) {
+  stopifnot(outcome %in% names(df))
+  
+  # keep only PC variables present
+  keep <- intersect(module_vars, names(df))
+  keep <- setdiff(keep, outcome)
+  keep <- keep[grepl(pc_pattern, keep, ignore.case = ignore_case)]
+  if (length(keep) == 0L) {
+    message(sprintf("[%s] no PC variables found; skipping.", module_name))
+    return(NULL)
+  }
+  
+  dat_mod <- impute_full(df, keep, outcome = outcome)
+  
+  # Design matrix; drop intercept
+  X <- model.matrix(as.formula(paste(outcome, "~ .")), data = dat_mod)[, -1, drop = FALSE]
+  y <- dat_mod[[outcome]]
+  
+  # drop constant columns
+  is_const <- vapply(seq_len(ncol(X)), function(j) length(unique(X[, j])) <= 1, logical(1))
+  if (any(is_const)) X <- X[, !is_const, drop = FALSE]
+  if (ncol(X) == 0L) {
+    message(sprintf("[%s] no nonconstant predictors; skipping.", module_name))
+    return(NULL)
+  }
+  
+  # ----- Robust alignment of penalty.factor to colnames(X) -----
+  if (is.null(penalty.factor)) {
+    penalty.factor <- rep(1, ncol(X))
+  } else {
+    pf <- penalty.factor
+    if (!is.null(names(pf))) {
+      pf_aligned <- pf[colnames(X)]
+      pf_aligned[is.na(pf_aligned)] <- 1
+      penalty.factor <- as.numeric(pf_aligned)
+    } else if (length(pf) == ncol(X)) {
+      penalty.factor <- as.numeric(pf)
+    } else {
+      pc_id <- suppressWarnings(as.integer(sub(".*PC(\\d+).*", "\\1", colnames(X))))
+      if (all(!is.na(pc_id))) {
+        rng <- range(pc_id, na.rm = TRUE)
+        penalty.factor <- 1 + (pc_id - rng[1]) / (diff(rng) + 1e-8)
+      } else {
+        penalty.factor <- rep(1, ncol(X))
+      }
+    }
+  }
+  
+  set.seed(666)
+  cvfit <- cv.glmnet(
+    x = X, y = y, family = "binomial",
+    alpha = 1, standardize = TRUE, nfolds = nfolds,
+    type.measure = "auc",
+    lower.limits = lower.limits, upper.limits = upper.limits,
+    dfmax = dfmax, pmax = pmax,
+    penalty.factor = penalty.factor
+  )
+  
+  # Prefer sparser lambda.1se when available
+  lam_base <- if (use_1se && !is.null(cvfit$lambda.1se)) cvfit$lambda.1se else cvfit$lambda.min
+  
+  # Optionally seek λ with ≈ target_k nonzeros
+  if (!is.null(target_k)) {
+    all_lam <- sort(unique(c(cvfit$lambda, lam_base)), decreasing = TRUE) # larger λ → sparser
+    nz_count <- vapply(all_lam, function(s) {
+      b <- as.matrix(coef(cvfit$glmnet.fit, s = s))
+      count_nonzero(b)
+    }, integer(1))
+    idx <- which.min(abs(nz_count - target_k))
+    lam_base <- all_lam[idx]
+  }
+  
+  # AUCs (TRAIN) for lambda.min and lam_base
+  p_min <- as.numeric(predict(cvfit, newx = X, s = "lambda.min", type = "response"))
+  roc_m  <- pROC::roc(y, p_min, quiet = TRUE)
+  auc_m  <- as.numeric(pROC::auc(roc_m))
+  
+  p_sel <- as.numeric(predict(cvfit, newx = X, s = lam_base, type = "response"))
+  roc_b <- pROC::roc(y, p_sel, quiet = TRUE)
+  auc_b <- as.numeric(pROC::auc(roc_b))
+  
+  # Coefficients at lam_base
+  bb <- as.matrix(coef(cvfit, s = lam_base))
+  nz <- bb[rownames(bb) != "(Intercept)" & as.vector(bb) != 0, , drop = FALSE]
+  nz <- nz[order(abs(nz[, 1]), decreasing = TRUE), , drop = FALSE]
+  
+  list(
+    module     = module_name,
+    cvfit      = cvfit,
+    X          = X,
+    y          = y,
+    lambda_sel = lam_base,
+    roc_min    = roc_m,
+    auc_min    = auc_m,
+    roc_best   = roc_b,
+    auc_best   = auc_b,
+    coef_best  = nz
+  )
+}
+
+## ================================================================
+## EXTEND PATH IF CURRENT λ GIVES ALL-ZERO
+## ================================================================
+pick_lambda_per_module <- function(
+    res,
+    lower.limits,
+    upper.limits,
+    nlambda_extend = 400,
+    lambda_min_ratio_extend = 1e-6
+) {
+  if (is.null(res)) return(NULL)
+  if (!is.null(res$coef_best) && nrow(res$coef_best) > 0) return(res)
+  
+  fit_ext <- glmnet(
+    x = res$X, y = res$y,
+    family = "binomial", alpha = 1, standardize = TRUE,
+    nlambda = nlambda_extend,
+    lambda.min.ratio = lambda_min_ratio_extend,
+    lower.limits = lower.limits,
+    upper.limits = upper.limits
+  )
+  
+  lam_best <- NA_real_
+  nz <- NULL
+  
+  # search for first λ (from small to large) with nonzero coefficients
+  for (lam in sort(fit_ext$lambda, decreasing = FALSE)) {
+    b <- as.matrix(coef(fit_ext, s = lam))
+    b <- b[rownames(b) != "(Intercept)" & as.vector(b) != 0, , drop = FALSE]
+    if (nrow(b) > 0) {
+      lam_best <- lam
+      nz <- b
+      break
+    }
+  }
+  
+  if (is.na(lam_best)) {
+    message(sprintf("[%s] no nonzero PCs even after extension.", res$module))
+    res$lambda_sel <- NA_real_
+    res$coef_best  <- NULL
+    return(res)
+  }
+  
+  p <- as.numeric(predict(fit_ext, newx = res$X, s = lam_best, type = "response"))
+  roc_best <- pROC::roc(res$y, p, quiet = TRUE)
+  auc_best <- as.numeric(pROC::auc(roc_best))
+  
+  nz <- nz[order(abs(nz[, 1]), decreasing = TRUE), , drop = FALSE]
+  
+  res$lambda_sel <- lam_best
+  res$coef_best  <- nz
+  res$auc_best   <- auc_best
+  res$roc_best   <- roc_best
+  res
+}
+
+## ================================================================
+## SIMULATION: VARY SEEDS 400–500 AND RECORD SELECTED PCs
+## ================================================================
+if (!exists("merged_data")) {
+  stop("merged_data must exist in the environment.")
+}
+
+seeds <- 1:500   # 100 runs
+
+sel_vul_list <- vector("list", length(seeds))
+sel_haz_list <- vector("list", length(seeds))
+sel_cap_list <- vector("list", length(seeds))
+names(sel_vul_list) <- names(sel_haz_list) <- names(sel_cap_list) <- as.character(seeds)
+
+for (i in seq_along(seeds)) {
+  s <- seeds[i]
+  cat("Running seed =", s, "\n")
+  
+  ## ----------------- Train/test split (seed s) -----------------
+  set.seed(s)
+  train_idx <- caret::createDataPartition(merged_data$coliform, p = 0.6, list = FALSE)
+  train_dat <- merged_data[train_idx, , drop = FALSE]
+  test_dat  <- merged_data[-train_idx, , drop = FALSE]  # not used for selection
+  
+  ## ----------------- Module variable lists ---------------------
+  if (exists("vul_tab")) {
+    vars_vul <- setdiff(names(vul_tab), "grid_id")
+  } else {
+    vars_vul <- grep("^VUL_", names(train_dat), value = TRUE)
+  }
+  if (exists("haz_tab")) {
+    vars_haz <- setdiff(names(haz_tab), "grid_id")
+  } else {
+    vars_haz <- grep("^HAZ_", names(train_dat), value = TRUE)
+  }
+  if (exists("cap_tab")) {
+    vars_cap <- setdiff(names(cap_tab), "grid_id")
+  } else {
+    vars_cap <- grep("^CAP_", names(train_dat), value = TRUE)
+  }
+  
+  ## ----------------- Penalty scheme for Vulnerability ----------
+  vul_names <- intersect(vars_vul, names(train_dat))
+  pc_id_raw <- suppressWarnings(as.integer(sub(".*PC(\\d+).*", "\\1", vul_names)))
+  pf_vul <- if (all(!is.na(pc_id_raw)) && length(pc_id_raw) > 0L) {
+    lo <- min(pc_id_raw); hi <- max(pc_id_raw)
+    1 + (pc_id_raw - lo) / (max(1e-8, hi - lo))
+  } else if (length(vul_names) > 0L) {
+    rep(1, length(vul_names))
+  } else {
+    numeric(0)
+  }
+  if (length(pf_vul) > 0L) names(pf_vul) <- vul_names
+  
+  ## ----------------- Fit per-module LASSO on train_dat ---------
+  # Vulnerability: β >= 0
+  res_vul <- if (length(vars_vul) > 0L) {
+    fit_lasso_module_pc_only(
+      df = train_dat,
+      module_vars = vars_vul,
+      module_name = "Vulnerability",
+      lower.limits = 0, upper.limits = Inf,
+      dfmax = 5, pmax = 29,
+      penalty.factor = pf_vul,
+      use_1se = TRUE, target_k = 5
+    )
+  } else NULL
+  res_vul <- pick_lambda_per_module(res_vul, lower.limits = 0, upper.limits = Inf)
+  
+  # Hazard: β >= 0
+  res_haz <- if (length(vars_haz) > 0L) {
+    fit_lasso_module_pc_only(
+      df = train_dat,
+      module_vars = vars_haz,
+      module_name = "Hazard",
+      lower.limits = 0, upper.limits = Inf,
+      dfmax = 5, pmax = 6,
+      use_1se = TRUE, target_k = 5
+    )
+  } else NULL
+  res_haz <- pick_lambda_per_module(res_haz, lower.limits = 0, upper.limits = Inf)
+  
+  # Capacity: β <= 0
+  res_cap <- if (length(vars_cap) > 0L) {
+    fit_lasso_module_pc_only(
+      df = train_dat,
+      module_vars = vars_cap,
+      module_name = "Capacity",
+      lower.limits = -Inf, upper.limits = 0,
+      dfmax = 5, pmax = 10,
+      use_1se = TRUE, target_k = 5
+    )
+  } else NULL
+  res_cap <- pick_lambda_per_module(res_cap, lower.limits = -Inf, upper.limits = 0)
+  
+  ## ----------------- Record selected PCs -----------------------
+  sel_vul_list[[i]] <- if (!is.null(res_vul) && !is.null(res_vul$coef_best)) {
+    rownames(res_vul$coef_best)
+  } else character(0)
+  
+  sel_haz_list[[i]] <- if (!is.null(res_haz) && !is.null(res_haz$coef_best)) {
+    rownames(res_haz$coef_best)
+  } else character(0)
+  
+  sel_cap_list[[i]] <- if (!is.null(res_cap) && !is.null(res_cap$coef_best)) {
+    rownames(res_cap$coef_best)
+  } else character(0)
+}
+
+## ================================================================
+## MAJORITY VOTING TABLES
+## ================================================================
+make_vote_table <- function(sel_list, seeds) {
+  pcs <- unlist(sel_list, use.names = FALSE)
+  if (length(pcs) == 0L) {
+    return(data.frame(PC = character(0), count = integer(0), prop = numeric(0)))
+  }
+  tab <- sort(table(pcs), decreasing = TRUE)
+  data.frame(
+    PC    = names(tab),
+    count = as.integer(tab),
+    prop  = as.integer(tab) / length(seeds),
+    row.names = NULL
+  )
+}
+
+vote_vul <- make_vote_table(sel_vul_list, seeds)
+vote_haz <- make_vote_table(sel_haz_list, seeds)
+vote_cap <- make_vote_table(sel_cap_list, seeds)
+
+maj_thresh <- length(seeds) / 2
+
+maj_vul <- subset(vote_vul, count > maj_thresh)
+maj_haz <- subset(vote_haz, count > maj_thresh)
+maj_cap <- subset(vote_cap, count > maj_thresh)
+
+cat("\n=== Majority PCs (selected in > 50% of runs) ===\n")
+
+cat("\n[Vulnerability]\n")
+print(maj_vul)
+
+cat("\n[Hazard]\n")
+print(maj_haz)
+
+cat("\n[Capacity]\n")
+print(maj_cap)
+
+cat("\nTop PCs by frequency (no threshold) — Vulnerability:\n")
+print(head(vote_vul, 5))
+
+cat("\nTop PCs by frequency (no threshold) — Hazard:\n")
+print(head(vote_haz, 5))
+
+cat("\nTop PCs by frequency (no threshold) — Capacity:\n")
+print(head(vote_cap, 5))
+
+## ================================================================
+## 2. Helpers
+## ================================================================
+
+## ---- Case-insensitive PC name matcher: "vul_PC1" / "VUL_PC1" both OK ----
+get_pc_vars <- function(prefix, pc_index_vec, df) {
+  all_names <- names(df)
+  target_names <- paste0(prefix, "_PC", pc_index_vec)
+  # match ignoring case, return the actual column names from df
+  match_idx <- which(tolower(all_names) %in% tolower(target_names))
+  all_names[match_idx]
+}
+
+## ---- Simple numeric median imputation ----
+impute_numeric_median <- function(df) {
+  out <- df
+  for (v in names(out)) {
+    if (is.numeric(out[[v]])) {
+      med <- suppressWarnings(median(out[[v]], na.rm = TRUE))
+      if (!is.finite(med)) med <- 0
+      out[[v]][is.na(out[[v]])] <- med
+    }
+  }
+  out
+}
+
+## ---- Constrained logistic regression with λ ≈ 0 (no effective penalty) ----
+fit_constrained_glmnet_nopenalty <- function(
+    df_train, df_test, y_name,
+    pc_vars,
+    lower_lim, upper_lim,
+    lambda_small = 1e-10,
+    module_label = "module"
+) {
+  if (length(pc_vars) == 0L) {
+    stop(sprintf("No requested PCs found in training data for %s.", module_label))
+  }
+  
+  # Keep only outcome + PCs
+  df_tr <- df_train[, c(y_name, pc_vars), drop = FALSE]
+  df_te <- df_test[,  c(y_name, pc_vars), drop = FALSE]
+  
+  # Impute numeric vars
+  df_tr <- impute_numeric_median(df_tr)
+  df_te <- impute_numeric_median(df_te)
+  
+  y_tr <- df_tr[[y_name]]
+  y_te <- df_te[[y_name]]
+  
+  X_tr <- as.matrix(df_tr[, pc_vars, drop = FALSE])
+  X_te <- as.matrix(df_te[, pc_vars, drop = FALSE])
+  
+  # Fit logistic regression with tiny λ and sign constraints
+  fit <- glmnet(
+    x = X_tr, y = y_tr,
+    family = "binomial",
+    alpha = 0,                 # ridge structure, but λ is tiny
+    lambda = lambda_small,     # approximate "no penalty"
+    standardize = TRUE,
+    lower.limits = lower_lim,
+    upper.limits = upper_lim
+  )
+  
+  # Predictions and AUC
+  p_tr <- as.numeric(predict(fit, newx = X_tr, type = "response"))
+  p_te <- as.numeric(predict(fit, newx = X_te, type = "response"))
+  
+  auc_tr <- as.numeric(pROC::auc(pROC::roc(y_tr, p_tr, quiet = TRUE)))
+  auc_te <- as.numeric(pROC::auc(pROC::roc(y_te, p_te, quiet = TRUE)))
+  
+  coefs <- as.matrix(coef(fit))
+  
+  cat("\n=====================================\n")
+  cat(module_label, " — constrained logistic regression (λ ≈ 0)\n")
+  cat("=====================================\n")
+  cat("Train AUC:", round(auc_tr, 3),
+      " | Test AUC:", round(auc_te, 3), "\n\n")
+  cat("Coefficients:\n")
+  print(round(coefs, 6))
+  
+  invisible(list(
+    fit       = fit,
+    coef      = coefs,
+    auc_train = auc_tr,
+    auc_test  = auc_te
+  ))
+}
+
+## ================================================================
+## 3. Vulnerability module (β ≥ 0)
+##    PCs: 1, 9, 10, 15, 28
+## ================================================================
+vul_pc_idx <- c(1, 10)
+vul_pcs <- get_pc_vars("vul", vul_pc_idx, train_dat)  # matches vul_PC*, VUL_PC*, etc.
+
+fit_vul <- fit_constrained_glmnet_nopenalty(
+  df_train     = train_dat,
+  df_test      = test_dat,
+  y_name       = "coliform",
+  pc_vars      = vul_pcs,
+  lower_lim    = 0,      # β ≥ 0
+  upper_lim    = Inf,
+  module_label = "Vulnerability (β ≥ 0; PCs 1, 9, 10, 15, 28)"
+)
+
+## ================================================================
+## 4. Hazard module (β ≥ 0)
+##    PCs: 1, 2, 3, 5, 6
+## ================================================================
+haz_pc_idx <- c(5, 6)
+haz_pcs <- get_pc_vars("haz", haz_pc_idx, train_dat)
+
+fit_haz <- fit_constrained_glmnet_nopenalty(
+  df_train     = train_dat,
+  df_test      = test_dat,
+  y_name       = "coliform",
+  pc_vars      = haz_pcs,
+  lower_lim    = 0,      # β ≥ 0
+  upper_lim    = Inf,
+  module_label = "Hazard (β ≥ 0; PCs 1, 2, 3, 5, 6)"
+)
+
+## ================================================================
+## 5. Capacity module (β ≤ 0)
+##    PCs: 2, 4, 8, 9, 10
+## ================================================================
+cap_pc_idx <- c(2, 4, 8, 10)
+cap_pcs <- get_pc_vars("cap", cap_pc_idx, train_dat)
+
+fit_cap <- fit_constrained_glmnet_nopenalty(
+  df_train     = train_dat,
+  df_test      = test_dat,
+  y_name       = "coliform",
+  pc_vars      = cap_pcs,
+  lower_lim    = -Inf,   # β ≤ 0
+  upper_lim    = 0,
+  module_label = "Capacity (β ≤ 0; PCs 2, 4, 8, 9, 10)"
+)
 ```
 
-#### Binarize continuous testing results
+## Two-sample tests
 
-In the pooled datasets created below, binary and continuous E. coli and Total Coliform testing results measured in MPN (most probable number)/100 mL were pooled together after the continuous testing results were binarized. The [WHO](https://pmc.ncbi.nlm.nih.gov/articles/PMC7313150/#:~:text=According%20to%20the%20World%20Health,100%20ml%20is%20medium%20risk.) recommends that “Zero count of E. coli per 100 ml of water is considered safe for drinking. A count of 1–10 MPN/100 ml is regarded as low risk; 11–100 MPN/100 ml is medium risk.” Therefore, we consider continuous testing results of 0, \<1, or 1 MPN/100 mL to be uncontaminated, and testing results \>1 MPN/100 mL to be contaminated.
+Next, we compare the performance of two-sample tests across three approaches for constructing the composite risk score: (1) supervised using PCs, (2) supervised using the original non-PC variables, and (3) unsupervised dimension reduction. We conduct one-sided \\textit{t}-tests, permutation \\textit{t}-tests, and Wilcoxon rank-sum tests to evaluate whether the mean or median risk score in the detect group is greater than that in the non-detect group, using a significance level of 0.05. A rainbow plot is also provided to visualize the distribution of the risk scores.
+
+### Supervised (PCs)
+
+In the following results, we observe significant differences in the composite risk scores between the detect and non-detect groups.
 
 ```{r}
-# Turn all testing results into Absent or Present
-microbio_pooled_hurricane <- microbio_with_risk_hurricane %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0","<1", "1", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0","<1", "1", "Absent"), "Absent", "Present"))
-
-microbio_pooled_microbiology <- microbio_with_risk_microbiology %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "1", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1", "Absent"), "Absent", "Present"))
-
-microbio_pooled <- microbio_with_risk %>%
-  mutate(Ecoli_Result_Binary = ifelse(Ecoli_Result %in% c("0", "<1", "1", "Absent"), "Absent", "Present")) %>%
-  mutate(Coliform_Result_Binary = ifelse(Total_Coliform_Result%in% c("0", "<1", "1", "Absent"), "Absent", "Present"))
-```
-
-#### Filter for only western counties
-
-Since `microbio_with_risk_microbiology` contained samples outside of western North Caroline, the region most affected by Hurricane Helene, we will create `microbio_pooled_affected` to merge `microbio_with_risk_hurricane` with only `microbio_with_risk_microbiology` samples that were collected from the 25 counties listed in this [paper](https://pubs.acs.org/doi/10.1021/acs.estlett.5c00503).
-
-```{r}
-counties <- c("ALEXANDER CO ENVIRONMENTAL HEALTH", 
-              "ALLEGHANY CO ENVIRONMENTAL HEALTH", 
-              "ASHE CO ENVIRONMENTAL HEALTH", 
-              "AVERY CO ENVIRONMENTAL HEALTH", 
-              "BUNCOME CO ENVIRONMENTAL HEALTH", 
-              "BURKE CO ENVIRONMENTAL HEALTH", 
-              "CALDWELL CO ENVIRONMENTAL HEALTH", 
-              "CATAWBA CO ENVIRONMENTAL HEALTH", 
-              "CLAY CO ENVIRONMENTAL HEALTH", 
-              "CLEVELAND CO ENVIRONMENTAL HEALTH", 
-              "GASTON CO ENVIRONMENTAL HEALTH", 
-              "HAYWOOD CO ENVIRONMENTAL HEALTH", 
-              "HENDERSON CO ENVIRONMENTAL HEALTH", 
-              "JACKSON CO ENVIRONMENTAL HEALTH", 
-              "LINCOLN COUNTY ENVIRONMENTAL HEALTH", 
-              "MACON CO ENVIRONMENTAL HEALTH", 
-              "MADISON CO ENVIRONMENTAL HEALTH", 
-              "MCDOWELL CO ENVIRONMENTAL HEALTH", 
-              "MITCHELL CO ENVIRONMENTAL HEALTH", 
-              "POLK CO ENVIRONMENTAL HEALTH", 
-              "RUTHERFORD CO ENVIRONMENTAL HEALTH", 
-              "TRANSYLVANIA CO ENVIRONMENTAL HEALTH", 
-              "WATAUGA CO ENVIRONMENTAL HEALTH", 
-              "WILKES CO ENVIRONMENTAL HEALTH", 
-              "YANCEY COUNTY ENVIROMENTAL HEALTH")
-
-microbio_pooled_affected <- rbind(microbio_pooled_hurricane, microbio_pooled_microbiology) %>%
-  filter(!duplicated(StarLiMS_ID)) %>%
-  filter(System_Name %in% counties)
-
-n_microbio_pooled_affected <- nrow(microbio_pooled_affected)
-```
-
-After filtering for only western counties, there were `{r} n_microbio_pooled_affected` samples remaining.
-
-#### Wilcoxon rank-sum test for risk index of western vs. non-western counties
-
-```{r}
-microbio_pooled <- microbio_pooled %>% mutate(Is_Western = System_Name %in% counties)
-
-summary(microbio_pooled$risk[microbio_pooled$Is_Western == TRUE])
-summary(microbio_pooled$risk[microbio_pooled$Is_Western == FALSE])
-
-wilcox.test(microbio_pooled$risk ~ microbio_pooled$Is_Western, alternative = "less")
-
-ggplot(microbio_pooled) +
-  aes(x = Is_Western, y = risk, color = Is_Western) +
-  ggdist::stat_halfeye(aes(fill = Is_Western),
-                       adjust = 0.5, width = 0.6, .width = 0, 
-                       justification = -0.3) + 
-  geom_boxplot(width = .25, outlier.shape = NA) +
-  # geom_point(size = 1.5, alpha = 0.2, 
-  #            position = position_jitter(seed = 1, width = .1)) +
-  theme_minimal()
-```
-
-There is a significant difference between the risk indices of samples collected in western counties vs. samples collected in the rest of North Carolina (p = 0.0012), with samples from the western counties having a mean risk of 0.181 and non-western counties having a mean risk of 0.175.
-
-### 1.4 Percentage of contaminated samples per week
-
-We use the plots to determine a cutoff date for the time period when a hurricane's aftermath continues to impact microbial contamination in well water.
-
-#### Hurricane Helene testing
-
-For Hurricane Helene testing, the smoothed curve shows that the proportion of contaminated E. coli samples was 0% from 1/5/25 (the weeks of 12/22/24 and 12/29/24 had no samples) to 5/11/25, excluding the week of 3/2/5 which had 12.5% contaminated samples. The proportion of contaminated Total Coliform samples was relatively constant from the weeks of 1/5/25 to 3/23/25.
-
-The sample size per week decreased over time, likely due to decreased interest in testing after the impacts of Hurricane Helen subsided.
-
-```{r collapse = TRUE}
-# microbio_pooled_hurricane$Date_Collected <- mdy(microbio_pooled_hurricane$Date_Collected)
-microbio_weekly_summary_hurricane <- microbio_pooled_hurricane %>%
-  mutate(week = floor_date(Date_Collected, "week")) %>%
-  group_by(week) %>%
-  summarize(ecoli_proportion = mean(Ecoli_Result_Binary == "Present"), coliform_proportion = mean(Coliform_Result_Binary == "Present"), n = n())
-
-ggplot(microbio_weekly_summary_hurricane, aes(x = week, y = ecoli_proportion)) + 
-  labs(title = "Proportion of contaminated E. coli samples per week (Hurricane Helene testing)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") +
-  theme_minimal()
-
-ggplot(microbio_weekly_summary_hurricane, aes(x = week, y = coliform_proportion)) + 
-  labs(title = "Proportion of contaminated Total Coliform samples per week (Hurricane Helene testing)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") + 
-  theme_minimal()
-
-ggplot(microbio_weekly_summary_hurricane, aes(x = week, y = n)) + 
-  labs(title = "Number of samples per week (Hurricane Helene testing)") +
-  geom_col() + geom_smooth(se=F) + 
-  theme_minimal()
-```
-
-#### General microbiology testing
-
-For general microbiology testing, the smoothed curve shows that the proportion of contaminated samples for both E. coli and Total Coliform testing reached the lowest point around the beginning of March.
-
-```{r collapse = TRUE}
-# microbio_pooled_microbiology$Date_Collected <- mdy(microbio_pooled_microbiology$Date_Collected)
-microbio_weekly_summary_microbiology <- microbio_pooled_microbiology %>%
-  mutate(week = floor_date(Date_Collected, "week")) %>%
-  group_by(week) %>%
-  summarize(ecoli_proportion = mean(Ecoli_Result_Binary == "Present"), coliform_proportion = mean(Coliform_Result_Binary == "Present"), n = n())
-
-ggplot(microbio_weekly_summary_microbiology, aes(x = week, y = ecoli_proportion)) + 
-  labs(title = "Proportion of contaminated E. coli samples per week (General microbiology testing)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") + 
-  theme_minimal()
-
-ggplot(microbio_weekly_summary_microbiology, aes(x = week, y = coliform_proportion)) + 
-  labs(title = "Proportion of contaminated Total Coliform samples per week (General microbiology testing)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") + 
-  theme_minimal()
-
-ggplot(microbio_weekly_summary_microbiology, aes(x = week, y = n)) + 
-  labs(title = "Number of samples per week (General microbiology testing)") +
-  geom_col() + geom_smooth(se=F) + 
-  theme_minimal()
-```
-
-#### Hurricane Helene and general microbiology testing
-
-When results for both testing programs are combined, the proportion of contaminated E. coli samples reached the lowest point in mid-February, whereas the proportion of contaminated Total Coliform samples reached the lowest point in early March.
-
-```{r collapse = TRUE}
-# microbio_pooled$Date_Collected <- mdy(microbio_pooled$Date_Collected)
-microbio_weekly_summary_pooled <- microbio_pooled %>%
-  mutate(week = floor_date(Date_Collected, "week")) %>%
-  group_by(week) %>%
-  summarize(ecoli_proportion = mean(Ecoli_Result_Binary == "Present"), coliform_proportion = mean(Coliform_Result_Binary == "Present"), n = n())
-
-ggplot(microbio_weekly_summary_pooled, aes(x = week, y = ecoli_proportion)) + 
-  labs(title = "Proportion of contaminated E. coli samples per week (Hurricane Helene and general microbiology testing)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") + 
-  theme_minimal()
-
-ggplot(microbio_weekly_summary_pooled, aes(x = week, y = coliform_proportion)) + 
-  labs(title = "Proportion of contaminated Total Coliform samples per week (Hurricane Helene and general microbiology testing)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") + 
-  theme_minimal()
-
-ggplot(microbio_weekly_summary_pooled, aes(x = week, y = n)) + 
-  labs(title = "Number of samples per week (Hurricane Helene and general microbiology testing)") +
-  geom_col() + geom_smooth(se=F) + 
-  theme_minimal()
-```
-
-#### Hurricane Helene and general microbiology testing in western counties
-
-When results for both testing programs are combined and only the western counties listed [here](https://pubs.acs.org/doi/10.1021/acs.estlett.5c00503) are considered, the proportion of contaminated E. coli samples reached the lowest point in mid-February, whereas the proportion of contaminated Total Coliform samples reached the lowest point in early March.
-
-```{r collapse = TRUE}
-# microbio_pooled_affected$Date_Collected <- mdy(microbio_pooled_affected$Date_Collected)
-microbio_weekly_summary <- microbio_pooled_affected %>%
-  mutate(week = floor_date(Date_Collected, "week")) %>%
-  group_by(week) %>%
-  summarize(ecoli_proportion = mean(Ecoli_Result_Binary == "Present"), coliform_proportion = mean(Coliform_Result_Binary == "Present"), n = n())
-
-ggplot(microbio_weekly_summary, aes(x = week, y = ecoli_proportion)) + 
-  labs(title = "Proportion of contaminated E. coli samples per week (Hurricane Helene and general microbiology testing, western counties)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") + 
-  theme_minimal()
-
-ggplot(microbio_weekly_summary, aes(x = week, y = coliform_proportion)) + 
-  labs(title = "Proportion of contaminated Total Coliform samples per week (Hurricane Helene and general microbiology testing, western counties)") +
-  geom_col() + geom_smooth(se=F) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") + 
-  theme_minimal()
-
-ggplot(microbio_weekly_summary, aes(x = week, y = n)) + 
-  labs(title = "Number of samples per week (Hurricane Helene and general microbiology testing, western counties)") +
-  geom_col() + geom_smooth(se=F) + 
-  theme_minimal()
-```
-
-### 1.5 Filter dates to effective time period (9/25/24 - 3/1/25)
-
-Analyzing the plots from section 1.4, we see that the level of microbial contamination falls to its lowest point in early March. Here, we filter samples collected after 3/1/25, the end of the effective time period. 
-
-```{r collapse = TRUE}
-start_date <- '2024-09-25'
-end_date <- '2025-03-01'
-
-microbio_pooled_filtered <- microbio_pooled %>% filter(between(Date_Collected, as.Date(start_date), as.Date(end_date)))
-
-summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == TRUE])
-summary(microbio_pooled_filtered$risk[microbio_pooled_filtered$Is_Western == FALSE])
-
-wilcox.test(microbio_pooled_filtered$risk ~ microbio_pooled_filtered$Is_Western, alternative = "less")
-
-ggplot(microbio_pooled_filtered) +
-  aes(x = Is_Western, y = risk, color = Is_Western) +
-  ggdist::stat_halfeye(aes(fill = Is_Western),
-                       adjust = 0.5, width = 0.6, .width = 0, 
-                       justification = -0.3) + 
-  geom_boxplot(width = .25, outlier.shape = NA) +
-  # geom_point(size = 1.5, alpha = 0.2, 
-  #            position = position_jitter(seed = 1, width = .1)) +
-  theme_minimal()
-
-microbio_pooled_affected_filtered <- microbio_pooled_affected %>% filter(between(Date_Collected, as.Date(start_date), as.Date(end_date)))
-
-n_microbio_pooled_filtered <- nrow(microbio_pooled_filtered)
-n_microbio_pooled_affected_filtered <- nrow(microbio_pooled_affected_filtered)
-
-table_filtered_ecoli <- table(microbio_pooled_filtered$Ecoli_Result_Binary)
-table_affected_filtered_ecoli <- table(microbio_pooled_affected_filtered$Ecoli_Result_Binary)
-
-table_filtered_coliform <- table(microbio_pooled_filtered$Coliform_Result_Binary)
-table_affected_filtered_coliform <- table(microbio_pooled_affected_filtered$Coliform_Result_Binary)
-```
-
-After filtering the dates, there was a significant difference the risk index of samples taking from western and non-western counties. After also filtering by western vs. non-western, there were `{r} n_microbio_pooled_filtered` samples in `microbio_pooled_filtered` (all locations) and `{r} n_microbio_pooled_affected_filtered` samples for `microbio_pooled_affected_filtered` (western counties).
-
-We observe:
-
--   `{r} table_filtered_ecoli["Absent"]` uncontaminated and `{r} table_filtered_ecoli["Present"]` contaminated E. coli samples in `microbio_pooled_filtered`
-
--   `{r} table_affected_filtered_ecoli["Absent"]` uncontaminated and `{r} table_affected_filtered_ecoli["Present"]` contaminated E. coli samples in `microbio_pooled_affected_filtered`
-
--   `{r} table_filtered_coliform["Absent"]` uncontaminated and `{r} table_filtered_coliform["Present"]` contaminated Total Coliform samples in `microbio_pooled_filtered`
-
--   `{r} table_affected_filtered_coliform["Absent"]` uncontaminated and `{r} table_affected_filtered_coliform["Present"]` contaminated Total Coliform samples in `microbio_pooled_affected_filtered`.
-
-Downstream analysis will be performed using `microbio_pooled_affected_filtered`.
-
-
-### 2.1.1 Risk index distribution for E. coli in western counties
-
-Based on the Shapiro-Wilk tests, we reject the null hypothesis that the sample of risk indices for uncontaminated samples comes from a normal distribution (p = 5.625e-09), but we fail to reject the null hypothesis for contaminated samples (p = 0.7522). However, looking at the raincloud plot for contaminated samples, we see it is non-normal.
-
-```{r}
-table(microbio_pooled_affected_filtered$Ecoli_Result_Binary)
-by(microbio_pooled_affected_filtered$risk, microbio_pooled_affected_filtered$Ecoli_Result_Binary, summary)
-
-ggplot(microbio_pooled_affected_filtered) +
-  aes(x = Ecoli_Result_Binary, y = risk, color = Ecoli_Result_Binary) +
-  ggdist::stat_halfeye(aes(fill = Ecoli_Result_Binary),
-                       adjust = 0.5, width = 0.6, .width = 0, 
-                       justification = -0.3) + 
-  geom_boxplot(width = .25, outlier.shape = NA) +
-  geom_point(size = 1.5, alpha = 0.2, 
-             position = position_jitter(seed = 1, width = .1)) +
-  theme_minimal()
-
-shapiro.test(subset(microbio_pooled_affected_filtered, Ecoli_Result_Binary == "Absent")$risk)
-shapiro.test(subset(microbio_pooled_affected_filtered, Ecoli_Result_Binary == "Present")$risk)
-```
-
-### 2.1.2 Wilcoxon rank-sum test for E. coli in western counties
-
-There is a marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated E. coli tests (p = 0.07162).
-
-```{r}
-wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Ecoli_Result_Binary, alternative = "less")
-```
-
-### 2.2.1 Risk index distribution for Total Coliform in western counties
-
-Based on the raincloud plots and Shapiro-Wilk tests, we reject the null hypothesis that the sample of risk indices for both uncontaminated (p = 3.541e-07) and contaminated samples (p = 0.002128) comes from a normal distribution.
-
-```{r}
-table(microbio_pooled_affected_filtered$Coliform_Result_Binary)
-by(microbio_pooled_affected_filtered$risk, microbio_pooled_affected_filtered$Coliform_Result_Binary, summary)
-
-ggplot(microbio_pooled_affected_filtered) +
-  aes(x = Coliform_Result_Binary, y = risk, color = Coliform_Result_Binary) +
-  ggdist::stat_halfeye(aes(fill = Coliform_Result_Binary),
-                       adjust = 0.5, width = 0.6, .width = 0, 
-                       justification = -0.3) + 
-  geom_boxplot(width = .25, outlier.shape = NA) +
-  geom_point(size = 1.5, alpha = 0.2, 
-             position = position_jitter(seed = 1, width = .1)) +
-  theme_minimal()
-
-shapiro.test(subset(microbio_pooled_affected_filtered, Coliform_Result_Binary == "Absent")$risk)
-shapiro.test(subset(microbio_pooled_affected_filtered, Coliform_Result_Binary == "Present")$risk)
-```
-
-### 2.2.2 Wilcoxon rank-sum test for Total Coliform in western counties
-
-There is not marginally significant difference between the mean risk index for locations with uncontaminated vs. contaminated Total Coliform tests (p = 0.2258).
-
-```{r}
-wilcox.test(microbio_pooled_affected_filtered$risk ~ microbio_pooled_affected_filtered$Coliform_Result_Binary, alternative = "less")
-```
-
-## 3. Logistic regression
-
-The code below constructs four logistic regression models in total to classify samples into uncontaminated or contaminated classes. For E. coli contamination, it constructs one model using the overall risk index and one model using the individual risk modules: vulnerability, hazard, and capacity. The same is done for Total Coliform contamination.
-
-For E. coli contamination, the overall risk was not a significant predictor (p = 0.244). In the model with the individual risk modules, none of the modules were significant predictors. The model using overall risk as a sole predictor (AIC = 252.48) performed marginally better than the module using individual risk modules (AIC = 254.67).
-
-For Total Coliform contamination, the overall risk was not a significant predictor (p = 0.419). In the model with the individual risk modules, the capacity module was a highly significant predictor (p = 0.00316). Unlike for E. coli contamination, the model using individual risk modules (AIC = 978.6) performed better than the module using overall risk (AIC = 983.27).
-
-```{r}
-microbio_pooled_affected_filtered <- microbio_pooled_affected_filtered %>%
-                mutate(Ecoli_Result_Binary_Model = ifelse(Ecoli_Result_Binary %in% c("Absent"), 0, 1)) %>%
-                mutate(Coliform_Result_Binary_Model = ifelse(Coliform_Result_Binary %in% c("Absent"), 0, 1))
-
-log_model_ecoli <- glm(Ecoli_Result_Binary_Model ~ risk, data = microbio_pooled_affected_filtered, family = "binomial")
-summary(log_model_ecoli)
-
-multi_log_ecoli <- glm(Ecoli_Result_Binary_Model ~ index_vulnerability + index_hazard + index_capacity, data = microbio_pooled_affected_filtered, family = "binomial")
-summary(multi_log_ecoli)
-
-log_model_coliform <- glm(Coliform_Result_Binary_Model ~ risk, data = microbio_pooled_affected_filtered, family = "binomial")
-summary(log_model_coliform)
-
-multi_log_coliform <- glm(Coliform_Result_Binary_Model ~ index_vulnerability + index_hazard + index_capacity, data = microbio_pooled_affected_filtered, family = "binomial")
-summary(multi_log_coliform)
-
-coefplot(multi_log_coliform)
-
-# capacity_log_coliform <- glm(Coliform_Result_Binary_Model ~ index_capacity, data = microbio_pooled_affected_filtered, family = "binomial")
-# summary(capacity_log_coliform)
-```
-
-## 4. Youden's J statistic for risk index split
-
-Youden's J statistic was used to compute the cutoff threshold for contaminated vs. uncontaminated samples. The cutoff was 0.2103 for E. coli and 0.1648 for Coliform.
-
-```{r}
-# ROC with Youden's J statistic
-ROCit_obj_ecoli <- rocit(score = microbio_pooled_affected_filtered$risk, class = microbio_pooled_affected_filtered$Ecoli_Result_Binary_Model)
-plot(ROCit_obj_ecoli)
-
-ROCit_obj_coliform <- rocit(score = microbio_pooled_affected_filtered$risk, class = microbio_pooled_affected_filtered$Coliform_Result_Binary_Model)
-plot(ROCit_obj_coliform)
-
-# Risk index cutoff for E. coli test result
-ecoli_cp <- cutpointr(microbio_pooled_affected_filtered, risk, Ecoli_Result_Binary_Model, direction = ">=", method = maximize_metric, metric = youden, na.rm = TRUE)
-
-summary(ecoli_cp)
-
-# Risk index cutoff for Coliform test result
-coliform_cp <- cutpointr(microbio_pooled_affected_filtered, risk, Coliform_Result_Binary_Model, direction = ">=", method = maximize_metric, metric = youden, na.rm = TRUE)
-
-summary(coliform_cp)
+# 1) Drop geometry and standardize column names
+vul_tab <- sf::st_drop_geometry(vul_dat) |> dplyr::rename(index_vulnerability = index)
+haz_tab <- sf::st_drop_geometry(haz_dat) |> dplyr::rename(index_hazard        = index)
+cap_tab <- sf::st_drop_geometry(cap_dat) |> dplyr::rename(index_capacity      = index)
+
+# 2) Build a compact risk table (align by grid_id), then min–max scale to [0,1]
+risk_df <- vul_tab |>
+  dplyr::select(grid_id, index_vulnerability) |>
+  dplyr::left_join(haz_tab |> dplyr::select(grid_id, index_hazard),   by = "grid_id") |>
+  dplyr::left_join(cap_tab |> dplyr::select(grid_id, index_capacity), by = "grid_id") |>
+  dplyr::mutate(
+    risk_raw = index_vulnerability + index_hazard - index_capacity,
+    # guard against non-finite and all-NA edge cases
+    risk_raw = dplyr::if_else(is.finite(risk_raw), risk_raw, NA_real_),
+    risk_scaled = (risk_raw - min(risk_raw, na.rm = TRUE)) /
+      (max(risk_raw, na.rm = TRUE) - min(risk_raw, na.rm = TRUE))
+  ) |>
+  dplyr::select(grid_id, risk_raw, risk_scaled)
+
+# 3) Now join risk into your merged_data (or join modules later as you wish)
+merged_data <- data |>
+  dplyr::left_join(risk_df, by = "grid_id")
+
+merged_data <- merged_data %>%
+  # remove duplicate join suffixes
+  dplyr::select(
+    -tidyselect::matches("\\.x$"),
+    -tidyselect::matches("\\.y$"),
+    -tidyselect::matches("\\.x\\.x$"),
+    -tidyselect::matches("\\.y\\.y$")
+  ) %>%
+  # drop obvious non-predictors / outcomes
+  dplyr::select(
+    -tidyselect::any_of(c(
+      "System_Name", "Street_Address", "City", "State", "Zip",
+      "Street_Address_Concat", "EIN", "StarLiMS_ID",
+      "Date_Collected", "Sampling_Point", "Comment",
+      "Accuracy", "Accuracy_Type", "grid_id",
+      "risk", "Total_Coliform_Result", "Ecoli_Result"
+    ))
+  ) %>%
+  # drop geometry if still present
+  sf::st_drop_geometry() %>%
+  # drop all A_* variables and specific unwanted columns
+  dplyr::select(
+    -tidyselect::starts_with("A_"),
+    -tidyselect::any_of(c(
+      "Ecoli_Result_Binary",
+      "Coliform_Result_Binary",
+      "ecoli",
+      "y_fake"
+    ))
+  )
+
+## ===============================================================
+## Compute risk and compare by coliform status (one-sided: greater)
+## ===============================================================
+
+# Compute the risk score on merged data
+risk <- merged_data$risk_scaled
+
+# Split into training and test sets
+risk.test <- risk[-train_idx]
+
+# Basic parametric t-test (for reference)
+t.test(risk.test ~ test_dat$coliform, alternative = "less")
+
+
+library(ggplot2)
+library(ggdist)
+library(dplyr)
+
+## Build plotting data (align, drop NAs)
+df_plot <- tibble(
+  risk = risk.test,
+  coliform = test_dat$coliform
+) %>%
+  filter(!is.na(risk), !is.na(coliform)) %>%
+  mutate(
+    coliform = factor(coliform, levels = c(0, 1),
+                      labels = c("Negative", "Positive"))
+  )
+
+## Half-eye + boxplot + jitter, grouped by coliform
+ggplot(df_plot, aes(x = coliform, y = risk, color = coliform)) +
+  ggdist::stat_halfeye(
+    aes(fill = coliform),
+    adjust = 0.5, width = 0.6, .width = 0, justification = -0.3
+  ) +
+  geom_boxplot(width = 0.25, outlier.shape = NA) +
+  geom_point(size = 1.5, alpha = 0.2,
+             position = position_jitter(seed = 1, width = 0.1)) +
+  scale_x_discrete(NULL) +
+  labs(y = "Risk score", color = "Coliform", fill = "Coliform") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+## ===============================================================
+## Nonparametric comparisons (KS, Wilcoxon, Permutation t-test)
+## ===============================================================
+
+# Extract vectors (drop NAs)
+risk_vec <- risk.test
+group_vec <- test_dat$coliform
+keep <- !is.na(risk_vec) & !is.na(group_vec)
+risk_vec <- risk_vec[keep]
+group_vec <- as.factor(group_vec[keep])
+
+# Split into two groups: 0 = negative, 1 = positive
+risk_0 <- risk_vec[group_vec == 0]
+risk_1 <- risk_vec[group_vec == 1]
+
+## ---------------------------------------------------------------
+## 1. Wilcoxon rank-sum test (one-sided: risk_1 > risk_0)
+## ---------------------------------------------------------------
+wilcox_res <- wilcox.test(risk_vec ~ group_vec,
+                          alternative = "less",
+                          exact = FALSE)
+print(wilcox_res)
+
+## ---------------------------------------------------------------
+## 2. Permutation t-test (one-sided: mean(risk_1) > mean(risk_0))
+## ---------------------------------------------------------------
+set.seed(2025)
+n_perm <- 10000  # number of permutations
+obs_diff <- mean(risk_1) - mean(risk_0)
+
+perm_diffs <- replicate(n_perm, {
+  shuffled <- sample(group_vec)
+  mean(risk_vec[shuffled == 1]) - mean(risk_vec[shuffled == 0])
+})
+
+# one-sided p-value: proportion of permuted diffs ≥ observed
+p_perm <- mean(perm_diffs >= obs_diff)
+
+cat("\nPermutation t-test (alternative = 'greater'):\n",
+    "Observed mean difference =", round(obs_diff, 4),
+    "| p-value =", signif(p_perm, 4), "\n")
 ```
