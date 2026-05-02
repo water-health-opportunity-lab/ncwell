@@ -39,14 +39,13 @@ index_hazard        <- st_read(index_hazard_fp, quiet = TRUE)
 # 2) Standardize column names
 #    (keeps your original intent but avoids fragile numeric indexing downstream)
 # ---------------------------
-# index_capacity: 4th column is the capacity index
-names(index_capacity)[4] <- "index_capacity"
-
-# index_hazard: 4th column is the hazard index
-names(index_hazard)[4] <- "index_hazard"
-
-# index_vulnerability: 3rd column is the vulnerability index
-names(index_vulnerability)[3] <- "index_vulnerability"
+# The three files do not share the same column order. In particular,
+# `index_vulnerability.gpkg` does not carry `block_group_name`, so its `index`
+# column is in position 3 rather than 4. Rename by column name instead of
+# position to keep the script robust.
+names(index_capacity)[names(index_capacity) == "index"] <- "index_capacity"
+names(index_hazard)[names(index_hazard) == "index"] <- "index_hazard"
+names(index_vulnerability)[names(index_vulnerability) == "index"] <- "index_vulnerability"
 
 # ---------------------------
 # 3) Merge indices into one sf object

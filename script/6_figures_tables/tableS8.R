@@ -22,7 +22,7 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(caret)
 })
-
+# change to your working directory accordingly
 data_dir <- "~/Desktop/Research/Contamination risk"
 fp <- function(x) file.path(data_dir, x)
 
