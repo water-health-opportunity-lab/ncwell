@@ -1,5 +1,5 @@
 ###############################################################################
-# Figure 3 — ROC comparison for three Random Forest (RF) models
+# Figure 3 — ROC and calibration comparison for three Random Forest (RF) models
 # Manuscript: Hybrid supervised–unsupervised modeling for post-hurricane private
 # well contamination risk score using empirical validation and community
 # ground-truthing
@@ -15,7 +15,8 @@
 #   - Stratified k-fold CV tunes (mtry, nodesize) by mean AUC
 #   - Final RF fit with tuned hyperparameters (ntree fixed)
 #   - Probability cutoff chosen to maximize TRAIN F1
-#   - Report Train/Test AUC & F1; plot TEST ROC curves (manual FPR vs TPR)
+#   - Report Train/Test AUC & F1
+#   - Plot TEST ROC curves (Panel A) and calibration curves (Panel B)
 #
 # Notes:
 #   - Uses dplyr::select explicitly to avoid select() conflicts.
@@ -38,7 +39,7 @@ suppressPackageStartupMessages({
 # 1) Reproducibility controls
 # ---------------------------
 split_seed  <- 403
-rf_seed_use <- 166
+rf_seed_use <- 681
 ntree_use   <- 2000
 k_folds     <- 5
 
@@ -232,6 +233,19 @@ optimal_f1_cutoff <- function(y_true_posneg, prob_pos) {
     f1_vals[i] <- f1_score(y_true_posneg, pred)
   }
   cuts[which.max(f1_vals)]
+}
+
+make_calibration_df <- function(y_true_posneg, prob_pos, n_bins = 10) {
+  y01 <- ifelse(as.character(y_true_posneg) == "pos", 1, 0)
+  data.frame(y = y01, p = prob_pos) %>%
+    dplyr::mutate(bin = dplyr::ntile(p, n_bins)) %>%
+    dplyr::group_by(bin) %>%
+    dplyr::summarise(
+      mean_pred = mean(p, na.rm = TRUE),
+      obs_rate = mean(y, na.rm = TRUE),
+      n = dplyr::n(),
+      .groups = "drop"
+    )
 }
 
 # ---- Stratified folds ----
@@ -446,7 +460,7 @@ cat(sprintf("\n================ METHOD COMPARISON (rf_seed=%d) ================\
 print(comp_tbl)
 
 ###############################################################################
-# 10) ROC plot (TEST) — manual FPR vs TPR overlay
+# 10) Figure 3 — ROC (Panel A) and calibration (Panel B)
 ###############################################################################
 roc_xy <- function(roc_obj) {
   xy <- pROC::coords(
@@ -465,19 +479,37 @@ xy_h <- roc_xy(res_hybrid$fit$roc_test)
 xy_k <- roc_xy(res_kitchen$fit$roc_test)
 xy_u <- roc_xy(res_unsup$fit$roc_test)
 
+y_test <- make_posneg(test_dat$coliform)
+cal_h <- make_calibration_df(y_test, res_hybrid$fit$prob_test)
+cal_k <- make_calibration_df(y_test, res_kitchen$fit$prob_test)
+cal_u <- make_calibration_df(y_test, res_unsup$fit$prob_test)
+
+cols <- c("Hybrid" = "magenta", "Kitchen-sink" = "deepskyblue", "Unsupervised" = "indianred1")
+ltys <- c("Hybrid" = 1, "Kitchen-sink" = 2, "Unsupervised" = 3)
+pchs <- c("Hybrid" = 16, "Kitchen-sink" = 17, "Unsupervised" = 15)
+
 op <- par(no.readonly = TRUE)
-par(xaxs = "i", yaxs = "i")
+par(
+  mfrow = c(1, 2),
+  mar = c(4.4, 4.5, 2.8, 1.3),
+  oma = c(0, 0, 0, 0),
+  cex.axis = 1.05,
+  cex.lab = 1.15,
+  cex.main = 1.2,
+  xaxs = "i",
+  yaxs = "i"
+)
 
 plot(
   xy_h$fpr, xy_h$tpr,
-  type = "l", lwd = 2, col = "magenta",
+  type = "l", lwd = 2.8, col = cols["Hybrid"], lty = ltys["Hybrid"],
   xlim = c(0, 1), ylim = c(0, 1),
-  main = "Receiver Operating Characteristic Curve",
-  xlab = "False Positive Rate (1 - Specificity)",
-  ylab = "True Positive Rate (Sensitivity)"
+  main = "A. ROC Curves",
+  xlab = "False positive rate",
+  ylab = "True positive rate"
 )
-lines(xy_k$fpr, xy_k$tpr, lwd = 2, col = "deepskyblue")
-lines(xy_u$fpr, xy_u$tpr, lwd = 2, col = "indianred1")
+lines(xy_k$fpr, xy_k$tpr, lwd = 2.8, col = cols["Kitchen-sink"], lty = ltys["Kitchen-sink"])
+lines(xy_u$fpr, xy_u$tpr, lwd = 2.8, col = cols["Unsupervised"], lty = ltys["Unsupervised"])
 
 abline(a = 0, b = 1, lty = 2, col = "gray50")
 
@@ -488,9 +520,38 @@ legend(
     sprintf("Kitchen-sink (AUC = %.3f)", res_kitchen$fit$auc_test),
     sprintf("Unsupervised (AUC = %.3f)", res_unsup$fit$auc_test)
   ),
-  col = c("magenta", "deepskyblue", "indianred1"),
-  lwd = 2,
-  bty = "n"
+  col = cols,
+  lty = ltys,
+  lwd = 2.8,
+  bty = "n",
+  cex = 1.0
+)
+
+plot(
+  NA, NA,
+  xlim = c(0, 1), ylim = c(0, 1),
+  xlab = "Mean predicted probability",
+  ylab = "Observed detection rate",
+  main = "B. Calibration Plot"
+)
+abline(a = 0, b = 1, lty = 2, lwd = 1.4, col = "gray35")
+
+lines(cal_h$mean_pred, cal_h$obs_rate, col = cols["Hybrid"], lty = ltys["Hybrid"], lwd = 2.8)
+points(cal_h$mean_pred, cal_h$obs_rate, col = cols["Hybrid"], pch = pchs["Hybrid"], cex = 0.9)
+lines(cal_k$mean_pred, cal_k$obs_rate, col = cols["Kitchen-sink"], lty = ltys["Kitchen-sink"], lwd = 2.8)
+points(cal_k$mean_pred, cal_k$obs_rate, col = cols["Kitchen-sink"], pch = pchs["Kitchen-sink"], cex = 0.9)
+lines(cal_u$mean_pred, cal_u$obs_rate, col = cols["Unsupervised"], lty = ltys["Unsupervised"], lwd = 2.8)
+points(cal_u$mean_pred, cal_u$obs_rate, col = cols["Unsupervised"], pch = pchs["Unsupervised"], cex = 0.9)
+
+legend(
+  "topleft",
+  legend = c("Hybrid", "Kitchen-sink", "Unsupervised"),
+  col = cols,
+  lty = ltys,
+  pch = pchs,
+  lwd = 2.8,
+  bty = "n",
+  cex = 1.0
 )
 
 par(op)
