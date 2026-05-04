@@ -1,85 +1,107 @@
 # ncwell
 
-**Code repository for the REACH Center pilot project**  
+Code repository for the REACH Center pilot project  
 _Data-Driven Solutions to Mitigate the Impact of Hurricanes on Private Well Drinking Water Quality and Human Health_
 
-This project develops reproducible, data-driven workflows to analyze the effects of hurricanes on private well contamination and associated health risks. We use public datasets, geospatial methods, and exploratory data analysis in R.
+This repository contains the analysis workflow for a data-driven framework to quantify post-hurricane private well contamination risk. The motivating problem is that hurricane-related flooding can mobilize microbial and chemical contaminants, while limited well testing and uneven disaster response capacity leave many households relying on private wells at elevated risk during the early recovery phase.
 
----
+The framework developed here integrates 78 geospatial variables across three modules:
 
-## 📁 Project Structure
+- hazard
+- physical vulnerability
+- social capacity
+
+These components are combined into an interpretable composite risk score using a hybrid supervised-unsupervised strategy. In this project, the framework is applied to western North Carolina following Hurricane Helene and evaluated against post-hurricane well testing data and community-informed assessments. The repository therefore includes not only preprocessing and PCA workflows, but also validation, sensitivity analyses, and manuscript-ready figures and tables.
+
+## Project Structure
 
 ```text
 ncwell/
-├── LICENSE               # License information
-├── ncwell.Rproj          # RStudio project file
-├── README.md             # Project documentation
-├── renv.lock             # Records the exact versions of R and R packages to ensure reproducibility
-├── renv/                 # Directory containing renv infrastructure for the project
-├── data/                 # Directory containing input and output data, do not commit to git
-└── script/               # Main analysis scripts
-    ├── 1_access_data/       # Scripts to download or load raw data
-    ├── 2_data_wrangling/    # Scripts for cleaning and transforming data
-    └── 3_eda/               # Exploratory data analysis and initial visualizations
-```
-## 🚀 Getting Started with renv
-This project uses renv to manage R package dependencies, ensuring reproducibility. Here's how to get started:
-
-Clone the Repository:
-```text
-git clone https://github.com/water-health-opportunity-lab/ncwell.git # Replace with the actual URL
-cd ncwell
+├── LICENSE
+├── README.md
+├── ncwell.Rproj
+├── renv.lock
+├── renv/
+├── data/                         # local input/output data; do not commit large raw data
+└── script/
+    ├── 1_access_data/            # data acquisition scripts
+    ├── 2_data_wrangling/         # cleaning, harmonization, grid construction, imputation
+    ├── 3_exploratory_data_analysis/
+    ├── 4_statistical_analysis/   # PCA, index construction, risk mapping
+    ├── 5_model_validation/       # validation, robustness, selection-bias analyses
+    └── 6_figures_tables/         # manuscript and SI figures/tables
 ```
 
-Open the Project in RStudio: Open the ncwell.Rproj file in RStudio. This will automatically activate the renv environment.
-Restore Package Library: Run the following command in the R console to install the correct package versions:
+## Script Overview
 
-```text
+- `script/1_access_data/`: scripts to pull or assemble upstream datasets, including ACS and capacity-related inputs.
+- `script/2_data_wrangling/`: preprocessing scripts for hazard, vulnerability, and capacity layers, including common-grid setup and KNN imputation.
+- `script/3_exploratory_data_analysis/`: Quarto notebooks for module-specific exploratory analysis.
+- `script/4_statistical_analysis/`: Quarto notebooks for PCA-based dimension reduction, index construction, and risk mapping.
+- `script/5_model_validation/`: validation and robustness workflows, including hybrid supervised-unsupervised model assessment and selection-bias screening.
+- `script/6_figures_tables/`: scripts that generate manuscript figures and supporting-information tables such as `figure3.R`, `figureS1.R`, `figureS2.R`, `tableS8.R`, and `tableS10-to-S14.R`.
+
+In broad terms, the workflow moves from raw geospatial inputs, to cleaned module-specific datasets, to statistical dimension reduction and index construction, and finally to validation against well-testing outcomes and manuscript production.
+
+## Getting Started
+
+1. Clone the repository and open `ncwell.Rproj` in RStudio.
+2. Restore the project library with `renv::restore()`.
+3. Confirm the environment with `renv::status()`.
+4. Run scripts in workflow order, starting from data access and wrangling, then exploratory analysis, statistical analysis, validation, and finally figures/tables.
+
+If you are new to the project, a practical entry point is:
+
+- read the module notebooks in `script/3_exploratory_data_analysis/`
+- review the PCA and risk-construction notebooks in `script/4_statistical_analysis/`
+- then move to `script/5_model_validation/` and `script/6_figures_tables/` for the final model evaluation and manuscript outputs
+
+Example:
+
+```r
 renv::restore()
-```
-
-This will install the exact package versions specified in the renv.lock file.
-Confirm Confirm that the packages have been installed by running:
-
-```text
 renv::status()
 ```
 
-This will show you the status of the packages in your project.
-Work in the Project: You're now ready to work in the project! Any packages you install will be managed by renv.
+## Requirements
 
-## 🔧 Requirements
-This project uses R.
-To begin, open `ncwell.Rproj` in RStudio and run scripts in the `script/` folder in order.
+- R
+- RStudio (recommended)
+- System libraries required by spatial packages such as `sf`
+- A working LaTeX installation if you want to compile manuscript-ready `.tex` outputs into PDF
 
-## 🔐 API Keys
-Store your API keys (e.g., Census API) in an `.Renviron` file in your home directory:
+## Reproducibility
+
+This project uses `renv` to manage package versions. The lockfile records the package state used for the analysis. If you install or update packages intentionally, snapshot the environment with:
+
+```r
+renv::snapshot()
+```
+
+## Data and Secrets
+
+- Keep API keys such as `CENSUS_API_KEY` in `~/.Renviron`.
+- Do not commit `.Renviron`, large raw data files, or derived data that should remain local.
+
+Example `~/.Renviron` entry:
+
 ```text
 CENSUS_API_KEY=your_key_here
 ```
-Do not commit your `.Renviron` file to Git.
 
-## 🚧 Branching Guidelines
-This project uses the Git Flow workflow. Please follow these conventions when contributing:
+## Git Workflow
 
-Start from the develop branch:
+This repository follows a feature-branch workflow.
+
 ```text
 git checkout develop
 git pull origin develop
-```
-
-Create a new feature branch using the feat/ prefix:
-```text
 git checkout -b feat/short-description
-```
-
-Push your feature branch to GitHub:
-```text
 git push -u origin feat/short-description
 ```
 
-Submit a pull request from your feature branch into develop.
-Tag @xindyhu for review.
+Submit a pull request into `develop` and request review from the project maintainers.
 
-## 📌 Project Status
-This project is in active development under the REACH Center pilot grant.
+## Project Status
+
+This project is under active development as part of the REACH Center pilot grant.
