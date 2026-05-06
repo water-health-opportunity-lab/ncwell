@@ -1,0 +1,77 @@
+cff-version: 1.2.0
+title: "ncwell"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+
+authors:
+  - family-names: "Lin"
+    given-names: "Jilei"
+
+  - family-names: "Zhang"
+    given-names: "Jennifer"
+
+  - family-names: "Wei"
+    given-names: "Ellen"
+
+  - family-names: "Shea"
+    given-names: "Kyndra"
+
+  - family-names: "Wang"
+    given-names: "Huixia Judy"
+
+  - family-names: "Apanasovich"
+    given-names: "Tatiyana V."
+
+  - family-names: "Liddie"
+    given-names: "Jahred M."
+
+  - family-names: "Hernandez"
+    given-names: "Erika"
+
+  - family-names: "Norford"
+    given-names: "Crystal"
+
+  - family-names: "Hu"
+    given-names: "Xindi C."
+
+repository-code: "https://github.com/water-health-opportunity-lab/ncwell"
+url: "https://github.com/water-health-opportunity-lab/ncwell"
+
+license: "MIT"
+
+keywords:
+  - private wells
+  - hurricane
+  - contamination risk
+  - environmental health
+  - spatial analysis
+  - machine learning
+  - risk assessment
+  - water quality
+
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Lin"
+      given-names: "Jilei"
+    - family-names: "Zhang"
+      given-names: "Jennifer"
+    - family-names: "Wei"
+      given-names: "Ellen"
+    - family-names: "Shea"
+      given-names: "Kyndra"
+    - family-names: "Wang"
+      given-names: "Huixia Judy"
+    - family-names: "Apanasovich"
+      given-names: "Tatiyana V."
+    - family-names: "Liddie"
+      given-names: "Jahred M."
+    - family-names: "Hernandez"
+      given-names: "Erika"
+    - family-names: "Norford"
+      given-names: "Crystal"
+    - family-names: "Hu"
+      given-names: "Xindi C."
+  title: "Hybrid Supervised-Unsupervised Modeling for Post-Hurricane Private Well Contamination Risk Score Using Empirical Validation and Community-Informed Assessment"
+  journal: "GeoHealth"
+  status: "submitted"
